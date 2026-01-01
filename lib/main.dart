@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:google_nav_bar/google_nav_bar.dart';
 import 'package:line_icons/line_icons.dart';
+import 'package:provider/provider.dart';
 import 'pages/home_page.dart';
 import 'pages/music_page.dart';
 import 'pages/favorites_page.dart';
 import 'pages/history_page.dart';
 import 'widgets/player_page.dart';
 import 'pages/search_page.dart';
+import 'providers/search_provider.dart';
 
 void main() {
   runApp(const MyApp());
@@ -16,15 +18,18 @@ class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'My App',
-      theme: ThemeData(
+ Widget build(BuildContext context) {
+    return ChangeNotifierProvider(
+      create: (_) => SearchProvider(),
+      child: MaterialApp(
+        title: 'My App',
+        theme: ThemeData(
         primaryColor: Colors.grey[800],
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
       home: const MainPage(),
+      )
     );
   }
 }
@@ -189,7 +194,7 @@ class _MainPageState extends State<MainPage> {
                 if (_showPlayer)
                   MediaPlayerPage(
                     onBack: _closePlayer,
-                    onFullScreenChanged: _handleFullScreenChanged,
+                    onFullScreenChanged: _handleFullScreenChanged, thumbnailUrl: '',
                   ),
               ],
             ),

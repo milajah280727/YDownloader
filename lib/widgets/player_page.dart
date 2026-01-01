@@ -7,8 +7,23 @@ class MediaPlayerPage extends StatefulWidget {
   final VoidCallback? onBack;
   // Callback untuk memberi tahu main.dart jika fullscreen aktif/nonaktif
   final Function(bool)? onFullScreenChanged;
+  
+  // Parameter URL dari pencarian
+  final String? customVideoUrl;
+  final String? customAudioUrl;
+  // Parameter Thumbnail & Judul
+  final String? thumbnailUrl;
+  final String? title;
 
-  const MediaPlayerPage({super.key, this.onBack, this.onFullScreenChanged});
+  const MediaPlayerPage({
+    super.key, 
+    this.onBack, 
+    this.onFullScreenChanged, 
+    this.customVideoUrl, 
+    this.customAudioUrl,
+    this.thumbnailUrl,
+    this.title
+  });
 
   @override
   State<MediaPlayerPage> createState() => _MediaPlayerPageState();
@@ -19,6 +34,9 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
   late VideoPlayerController _audioController;
   bool _isVideoMode = true;
   bool _isFullScreen = false;
+
+  // State untuk slider mode (0 = Video, 1 = Audio)
+  int _modeSegment = 0; 
 
   // State untuk mengontrol visibilitas overlay di fullscreen
   bool _showControlsOverlay = true;
@@ -32,20 +50,37 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
   @override
   void initState() {
     super.initState();
-    _videoController = VideoPlayerController.networkUrl(
-      Uri.parse('https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4'),
-    );
+    
+    // Cek apakah ada custom URL (dari pencarian), jika tidak gunakan default
+    String vidUrl = widget.customVideoUrl ?? 'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4';
+    String audUrl = widget.customAudioUrl ?? 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
 
-    _audioController = VideoPlayerController.networkUrl(
-      Uri.parse('https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'),
-    );
+    // INISIALISASI BERSAMAAN
+    _videoController = VideoPlayerController.networkUrl(Uri.parse(vidUrl));
+    _audioController = VideoPlayerController.networkUrl(Uri.parse(audUrl));
 
-    _videoController.initialize().then((_) => setState(() {}));
-    _audioController.initialize().then((_) => setState(() {}));
+    _videoController.addListener(() {
+      setState(() {});
+    });
+    _audioController.addListener(() {
+      setState(() {});
+    });
+
+    Future.wait([
+      _videoController.initialize(),
+      _audioController.initialize(),
+    ]).then((_) {
+      setState(() {
+        _videoController.setLooping(_isRepeating);
+        _audioController.setLooping(_isRepeating);
+      });
+    });
   }
 
   @override
   void dispose() {
+    _videoController.removeListener(() {});
+    _audioController.removeListener(() {});
     _videoController.dispose();
     _audioController.dispose();
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
@@ -62,7 +97,6 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
       _isFullScreen = !_isFullScreen;
       _showControlsOverlay = true;
       
-      // Beri tahu parent (MainPage) jika status fullscreen berubah
       if (widget.onFullScreenChanged != null) {
         widget.onFullScreenChanged!(_isFullScreen);
       }
@@ -80,23 +114,79 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
     });
   }
 
-  // Fungsi baru untuk mengaktifkan/menonaktifkan Repeat
+  void _toggleMode(bool isVideo) {
+    if (_isVideoMode == isVideo) return; 
+
+    // Update state slider agar ikon bergerak
+    setState(() {
+      _modeSegment = isVideo ? 0 : 1; // 0 Video, 1 Audio
+    });
+
+    // Simpan status dan posisi
+    final wasPlaying = _activeController.value.isPlaying;
+    final currentPosition = _activeController.value.position;
+
+    _videoController.pause();
+    _audioController.pause();
+
+    setState(() {
+      _isVideoMode = isVideo;
+    });
+
+    // Sinkronisasi posisi
+    Future.microtask(() {
+      if (_activeController.value.isInitialized) {
+        _activeController.seekTo(currentPosition);
+        if (wasPlaying) {
+          _activeController.play();
+        }
+      }
+    });
+  }
+
   void _toggleRepeat() {
     setState(() {
       _isRepeating = !_isRepeating;
-      // Terapkan status repeat ke controller yang aktif sekarang
       _activeController.setLooping(_isRepeating);
     });
   }
 
-  void _toggleMode(bool isVideo) {
-    setState(() {
-      _videoController.pause();
-      _audioController.pause();
-      _isVideoMode = isVideo;
-      // Pastikan status repeat sinkron saat ganti mode
-      _activeController.setLooping(_isRepeating);
-    });
+  // Widget Slider Mode (Dipisah agar bisa dipanggil di beberapa tempat)
+  Widget _buildModeSegment() {
+    return SizedBox(
+      width: 160, // Lebar tetap agar rapi
+      child: SegmentedButton<int>(
+        style: ButtonStyle(
+          backgroundColor: MaterialStateProperty.resolveWith<Color>((Set<MaterialState> states) {
+            if (states.contains(MaterialState.selected)) {
+              return _accentColor; 
+            }
+            return Colors.white.withOpacity(0.15);
+          }),
+          iconColor: MaterialStateProperty.all(Colors.white),
+          padding: MaterialStateProperty.all(EdgeInsets.symmetric(horizontal: 8)),
+        ),
+        segments: const [
+          ButtonSegment<int>(
+            value: 0,
+            icon: Icon(Icons.videocam, size: 18),
+            label: Text('Video', style: TextStyle(fontSize: 12, color: Colors.white)),
+          ),
+          ButtonSegment<int>(
+            value: 1,
+            icon: Icon(Icons.music_note, size: 18),
+            label: Text('Audio', style: TextStyle(fontSize: 12, color: Colors.white)),
+          ),
+        ],
+        selected: {_modeSegment},
+        onSelectionChanged: (Set<int> newSelection) {
+          setState(() {
+            _modeSegment = newSelection.first;
+            _toggleMode(_modeSegment == 0);
+          });
+        },
+      ),
+    );
   }
 
   @override
@@ -107,27 +197,17 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: const Color.fromARGB(0, 75, 75, 75), // Transparan/Hitam Pudar
         elevation: 0,
-        title: const Text('Unified Player'),
-        centerTitle: true,
-        // Tombol Back di kiri atas
+        // Title dihapus
         leading: widget.onBack != null
             ? IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new),
+                // Icon back diubah jadi putih
+                icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
                 onPressed: widget.onBack,
               )
             : null,
-        actions: [
-          Switch(
-            value: _isVideoMode,
-            onChanged: (value) {
-              _videoController.pause();
-              _audioController.pause();
-              _toggleMode(value);
-            },
-          )
-        ],
+        // Actions dihapus karena slider pindah ke body
       ),
       body: _buildNormalView(),
     );
@@ -137,15 +217,24 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
   Widget _buildNormalView() {
     return Column(
       children: [
+        // 1. Slider Mode Dipindahkan ke Atas Tengah Body
+        Padding(
+          padding: const EdgeInsets.only(top: 10.0),
+          child: Center(child: _buildModeSegment()),
+        ),
+        
+        // 2. Area Visual
         Expanded(
           child: Align(
             alignment: Alignment.topCenter,
             child: Padding(
-              padding: const EdgeInsets.only(top: 40.0),
+              padding: const EdgeInsets.only(top: 20.0),
               child: _buildVisualArea(isFull: false),
             ),
           ),
         ),
+        
+        // 3. Kontrol Bawah
         Container(
           padding: const EdgeInsets.only(bottom: 30.0, left: 20, right: 20, top: 20),
           decoration: BoxDecoration(
@@ -164,10 +253,7 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // 1. Background Video/Audio
           _buildVisualArea(isFull: true),
-
-          // 2. Layer Interaksi (Show/Hide)
           if (_showControlsOverlay)
             GestureDetector(
               onTap: () {
@@ -198,9 +284,10 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
     );
   }
 
-  // Widget Konten Visual (Video/Audio)
   Widget _buildVisualArea({required bool isFull}) {
-    if (!_activeController.value.isInitialized) {
+    final controller = _activeController;
+
+    if (!controller.value.isInitialized) {
       return const Center(child: CircularProgressIndicator(color: Colors.white));
     }
 
@@ -208,79 +295,64 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
       if (isFull) {
         return Center(
           child: AspectRatio(
-            aspectRatio: _activeController.value.aspectRatio,
-            child: VideoPlayer(_activeController),
+            aspectRatio: controller.value.aspectRatio,
+            child: VideoPlayer(controller),
           ),
         );
       } else {
         return AspectRatio(
-          aspectRatio: _activeController.value.aspectRatio,
-          child: VideoPlayer(_activeController),
+          aspectRatio: controller.value.aspectRatio,
+          child: VideoPlayer(controller),
         );
       }
     } else {
       double size = isFull ? 150 : 200;
+      bool hasThumbnail = widget.thumbnailUrl != null && widget.thumbnailUrl!.isNotEmpty;
+
       return Center(
         child: Container(
           width: size,
           height: size,
           decoration: BoxDecoration(
-            // Ganti warna box audio jadi Pink
-            color: _accentColor,
+            color: hasThumbnail ? Colors.transparent : _accentColor,
             borderRadius: BorderRadius.circular(20),
             boxShadow: [
               BoxShadow(
-                // Ganti warna shadow jadi Pink transparan
                 color: _accentColor.withOpacity(0.5),
                 blurRadius: 20,
                 spreadRadius: 5,
               ),
             ],
+            image: hasThumbnail 
+                ? DecorationImage(
+                    image: NetworkImage(widget.thumbnailUrl!),
+                    fit: BoxFit.cover,
+                  )
+                : null,
           ),
-          child: const Icon(
-            Icons.music_note,
-            size: 80,
-            color: Colors.white,
-          ),
+          child: !hasThumbnail 
+              ? const Icon(Icons.music_note, size: 80, color: Colors.white)
+              : null,
         ),
       );
     }
   }
 
-  // Layout Overlay untuk Fullscreen
   Widget _buildFullScreenOverlay() {
     return Container(
       color: Colors.black.withOpacity(0.2), 
       child: Column(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // BARIS ATAS: Judul
+          // Bagian Atas: Slider Mode (Pindah ke sini, menggantikan Text Status)
           SafeArea(
             bottom: false,
             child: Padding(
               padding: const EdgeInsets.all(16.0),
-              child: Align(
-                alignment: Alignment.topLeft,
-                child: Text(
-                  _isVideoMode ? "Butterfly Video" : "SoundHelix Song 1",
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    shadows: [
-                      Shadow(
-                        blurRadius: 10.0,
-                        color: Colors.black,
-                        offset: Offset(0, 0),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+              child: Center(child: _buildModeSegment()),
             ),
           ),
-
-          // BARIS TENGAH: 3 Tombol Utama
+          
           Expanded(
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -296,7 +368,6 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                   iconSize: 48,
                 ),
                 const SizedBox(width: 20),
-
                 ValueListenableBuilder(
                   valueListenable: _activeController,
                   builder: (context, VideoPlayerValue value, child) {
@@ -319,7 +390,6 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                   },
                 ),
                 const SizedBox(width: 20),
-
                 IconButton(
                   onPressed: () {
                     _activeController.seekTo(
@@ -332,15 +402,12 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
               ],
             ),
           ),
-
-          // BARIS BAWAH: Progress Bar & Tombol
           SafeArea(
             top: false,
             child: Padding(
               padding: const EdgeInsets.only(left: 16.0, right: 16.0, top: 16.0, bottom: 40.0),
               child: Row(
                 children: [
-                  // Teks Waktu Kiri
                   ValueListenableBuilder(
                     valueListenable: _activeController,
                     builder: (context, VideoPlayerValue value, child) {
@@ -351,14 +418,11 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                     },
                   ),
                   const SizedBox(width: 10),
-                  
-                  // Progress Bar
                   Expanded(
                     child: ValueListenableBuilder(
                       valueListenable: _activeController,
                       builder: (context, VideoPlayerValue value, child) {
                         return Slider(
-                          // Ganti warna slider jadi Pink
                           activeColor: _accentColor,
                           inactiveColor: Colors.white54,
                           value: value.position.inSeconds.toDouble(),
@@ -370,9 +434,7 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                       },
                     ),
                   ),
-                  
                   const SizedBox(width: 10),
-                  // Teks Waktu Kanan
                   ValueListenableBuilder(
                     valueListenable: _activeController,
                     builder: (context, VideoPlayerValue value, child) {
@@ -383,12 +445,9 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                     },
                   ),
                   const SizedBox(width: 10),
-
-                  // Tombol Repeat (Pindah ke KANAN)
                   IconButton(
                     onPressed: _toggleRepeat,
                     icon: const Icon(Icons.repeat),
-                    // Ganti warna repeat aktif jadi Pink
                     color: _isRepeating ? _accentColor : Colors.white70, 
                     iconSize: 30,
                   ),
@@ -407,13 +466,15 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
     );
   }
 
-  // --- Kontrol Normal (Portrait) ---
   Widget _buildUnifiedControls() {
     return Column(
       mainAxisSize: MainAxisSize.max,
       children: [
         Text(
-          _isVideoMode ? "Butterfly Video" : "SoundHelix Song 1",
+          widget.title ?? "Media Player",
+          maxLines: 2,
+          textAlign: TextAlign.center,
+          overflow: TextOverflow.ellipsis,
           style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 15),
@@ -421,7 +482,6 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
           valueListenable: _activeController,
           builder: (context, VideoPlayerValue value, child) {
             return Slider(
-              // Ganti warna slider jadi Pink
               activeColor: _accentColor,
               inactiveColor: Colors.grey,
               value: value.position.inSeconds.toDouble(),
@@ -468,7 +528,6 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
               valueListenable: _activeController,
               builder: (context, VideoPlayerValue value, child) {
                 return FloatingActionButton(
-                  // Ganti warna FAB jadi Pink
                   backgroundColor: _accentColor,
                   onPressed: () {
                     setState(() {
@@ -485,11 +544,9 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
               onPressed: () => _activeController.seekTo(_activeController.value.position + const Duration(seconds: 10)),
               icon: const Icon(Icons.forward_10, color: Colors.white), iconSize: 30),
             const SizedBox(width: 15),
-            // Tombol Repeat Juga ditambahkan di mode normal agar sinkron
             IconButton(
               onPressed: _toggleRepeat,
               icon: const Icon(Icons.repeat),
-              // Ganti warna repeat aktif jadi Pink
               color: _isRepeating ? _accentColor : Colors.white70,
               iconSize: 30),
           ],
