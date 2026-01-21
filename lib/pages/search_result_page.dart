@@ -1,28 +1,30 @@
-import 'dart:convert'; 
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'package:http/http.dart' as http;
 import '../widgets/player_page.dart';
 import 'package:provider/provider.dart';
 import '../services/download_manager.dart';
+
 class SearchResultPage extends StatefulWidget {
   final String searchQuery;
-  
+
   const SearchResultPage({super.key, required this.searchQuery});
 
   @override
   State<SearchResultPage> createState() => _SearchResultPageState();
-} 
+}
 
 class _SearchResultPageState extends State<SearchResultPage> {
   late TextEditingController _searchController;
-  
+
   final YoutubeExplode _yt = YoutubeExplode();
   List<Video> _videos = [];
   bool _isLoading = false;
-  
-  String _baseUrl = ''; 
-  final String _remoteConfigUrl = 'https://gist.githubusercontent.com/milajah280727/216157b20454e7bd30721e2106c0efb7/raw/config.json';
+
+  String _baseUrl = '';
+  final String _remoteConfigUrl =
+      'https://gist.githubusercontent.com/milajah280727/216157b20454e7bd30721e2106c0efb7/raw/config.json';
 
   @override
   void initState() {
@@ -42,9 +44,16 @@ class _SearchResultPageState extends State<SearchResultPage> {
   // Fungsi untuk mengambil URL Server dari Gist
   Future<void> _fetchRemoteConfig() async {
     try {
-      final response = await http.get(Uri.parse(_remoteConfigUrl)).timeout(
-        const Duration(seconds: 3), // Dipercepat timeoutnya menjadi 3 detik
-      );
+      // --- TAMBAHKAN BARIS INI ---
+      // Kita tambahkan timestamp (waktu milidetik) di belakang URL
+      // agar setiap request dianggap unik dan tidak mengambil cache lama.
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final url = '$_remoteConfigUrl?t=$timestamp';
+      // ---------------------------
+
+      final response = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 3));
 
       if (response.statusCode == 200) {
         final Map<String, dynamic> config = json.decode(response.body);
@@ -54,17 +63,22 @@ class _SearchResultPageState extends State<SearchResultPage> {
           setState(() {
             _baseUrl = newUrl;
           });
+          // Log ini akan muncul jika berhasil
           print("✅ URL Server berhasil diperbarui: $newUrl");
+        } else {
+          print("⚠️ Format config salah atau api_base_url kosong");
         }
+      } else {
+        print("⚠️ Gagal mengambil config. Status code: ${response.statusCode}");
       }
     } catch (e) {
-      print("⚠️ Gagal refresh config, menggunakan URL sebelumnya (jika ada): $e");
+      print("⚠️ Gagal refresh config: $e");
     }
   }
 
   Future<void> _performSearch(String query) async {
     if (query.isEmpty) return;
-    
+
     setState(() {
       _isLoading = true;
       _videos = [];
@@ -73,7 +87,7 @@ class _SearchResultPageState extends State<SearchResultPage> {
     try {
       var searchResults = await _yt.search.search(query);
       var videoList = searchResults.take(10).toList();
-      
+
       setState(() {
         _videos = videoList;
         _isLoading = false;
@@ -86,45 +100,64 @@ class _SearchResultPageState extends State<SearchResultPage> {
     }
   }
 
+  // --- FUNGSI BARU UNTUK REFRESH ---
+  Future<void> _onRefresh() async {
+    // 1. Refresh Gist Config (Sesuai permintaan)
+    await _fetchRemoteConfig();
+
+    // 2. Refresh hasil pencarian (Manual call tanpa _isLoading overlay
+    //    agar animasi RefreshIndicator terlihat jelas)
+    try {
+      var searchResults = await _yt.search.search(_searchController.text);
+      var videoList = searchResults.take(10).toList();
+
+      setState(() {
+        _videos = videoList;
+      });
+    } catch (e) {
+      print("Error saat refresh data: $e");
+    }
+  }
+
   Future<void> _openPlayer(Video video) async {
-    // 1. Tampilkan loading indicator sebentar agar user tahu aplikasi memproses
+    // Tampilkan loading indicator
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator(color: Colors.pinkAccent))
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(color: Colors.pinkAccent),
+      ),
     );
 
-    // 2. OTOMATIS REFRESH GIST saat user klik video
+    // OTOMATIS REFRESH GIST saat user klik video
     await _fetchRemoteConfig();
 
-    // Sembunyikan loading
     if (mounted) Navigator.pop(context);
 
-    // 3. Cek apakah URL valid
     if (_baseUrl.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Gagal memuat konfigurasi server! Cek koneksi.')),
+          const SnackBar(
+            content: Text('Gagal memuat konfigurasi server! Cek koneksi.'),
+          ),
         );
       }
       return;
     }
 
-    // 4. Siapkan URL Video
     String youtubeUrl = 'https://www.youtube.com/watch?v=${video.id}';
     String streamUrl = '$_baseUrl/stream-video?url=$youtubeUrl&resolution=720';
 
     String thumbnailUrl = video.thumbnails.highResUrl;
     String title = video.title;
-    
-    // 5. Buka Player
+
     if (mounted) {
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) => MediaPlayerPage(
             onBack: () => Navigator.pop(context),
-            customVideoUrl: streamUrl, 
+            customVideoUrl: streamUrl,
             thumbnailUrl: thumbnailUrl,
             title: title,
             youtubeUrl: youtubeUrl,
@@ -137,8 +170,6 @@ class _SearchResultPageState extends State<SearchResultPage> {
 
   @override
   Widget build(BuildContext context) {
-
-
     return Scaffold(
       backgroundColor: const Color.fromARGB(255, 26, 26, 26),
       body: Stack(
@@ -148,7 +179,10 @@ class _SearchResultPageState extends State<SearchResultPage> {
               SafeArea(
                 bottom: false,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 10,
+                  ),
                   child: Row(
                     children: [
                       IconButton(
@@ -161,22 +195,34 @@ class _SearchResultPageState extends State<SearchResultPage> {
                           controller: _searchController,
                           readOnly: true,
                           onTap: () => Navigator.pop(context),
-                          style: const TextStyle(color: Colors.white, fontSize: 14),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                          ),
                           decoration: InputDecoration(
                             hintText: "Cari...",
                             hintStyle: const TextStyle(color: Colors.grey),
                             filled: true,
                             fillColor: Colors.grey[850],
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 0),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 0,
+                            ),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(30),
                               borderSide: BorderSide.none,
                             ),
                             focusedBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(30),
-                              borderSide: const BorderSide(color: Colors.pink, width: 1),
+                              borderSide: const BorderSide(
+                                color: Colors.pink,
+                                width: 1,
+                              ),
                             ),
-                            suffixIcon: const Icon(Icons.search, color: Colors.grey),
+                            suffixIcon: const Icon(
+                              Icons.search,
+                              color: Colors.grey,
+                            ),
                           ),
                         ),
                       ),
@@ -189,15 +235,25 @@ class _SearchResultPageState extends State<SearchResultPage> {
               // Tampilan Status URL
               if (_baseUrl.isNotEmpty)
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 5,
+                  ),
                   child: Row(
                     children: [
-                      const Icon(Icons.cloud_done, color: Colors.green, size: 14),
+                      const Icon(
+                        Icons.cloud_done,
+                        color: Colors.green,
+                        size: 14,
+                      ),
                       const SizedBox(width: 5),
                       Expanded(
                         child: Text(
                           "Server: ${Uri.parse(_baseUrl).host}",
-                          style: const TextStyle(color: Colors.green, fontSize: 12),
+                          style: const TextStyle(
+                            color: Colors.green,
+                            fontSize: 12,
+                          ),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
@@ -207,90 +263,119 @@ class _SearchResultPageState extends State<SearchResultPage> {
 
               Expanded(
                 child: _isLoading
-                    ? const Center(child: CircularProgressIndicator(color: Colors.pinkAccent))
+                    ? const Center(
+                        child: CircularProgressIndicator(
+                          color: Colors.pinkAccent,
+                        ),
+                      )
                     : _videos.isEmpty
-                        ? Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(Icons.search_off, size: 80, color: Colors.grey),
-                                const SizedBox(height: 20),
-                                const Text('Tidak ada hasil ditemukan', style: TextStyle(color: Colors.white)),
-                              ],
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(
+                              Icons.search_off,
+                              size: 80,
+                              color: Colors.grey,
                             ),
-                          )
-                        : ListView.builder(
-                            padding: const EdgeInsets.all(10),
-                            itemCount: _videos.length,
-                            itemBuilder: (context, index) {
-                              final video = _videos[index];
-                              return Card(
-                                color: Colors.grey[900],
-                                margin: const EdgeInsets.only(bottom: 10),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: ListTile(
-                                  contentPadding: EdgeInsets.zero,
-                                  leading: SizedBox(
-                                    width: 110, 
-                                    height: 140, 
-                                    child: Stack(
-                                      children: [
-                                        ClipRRect(
-                                          borderRadius: const BorderRadius.only(
-                                            topLeft: Radius.circular(10),
-                                            bottomLeft: Radius.circular(10),
+                            const SizedBox(height: 20),
+                            const Text(
+                              'Tidak ada hasil ditemukan',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ],
+                        ),
+                      )
+                    : // --- WRAPPER REFRESH INDICATOR DITAMBAHKAN DISINI ---
+                      RefreshIndicator(
+                        onRefresh: _onRefresh,
+                        color:
+                            Colors.pinkAccent, // Warna ikon loading sesuai tema
+                        backgroundColor:
+                            Colors.grey[900], // Warna background lingkaran
+                        child: ListView.builder(
+                          padding: const EdgeInsets.all(10),
+                          itemCount: _videos.length,
+                          itemBuilder: (context, index) {
+                            final video = _videos[index];
+                            return Card(
+                              color: Colors.grey[900],
+                              margin: const EdgeInsets.only(bottom: 10),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: SizedBox(
+                                  width: 110,
+                                  height: 140,
+                                  child: Stack(
+                                    children: [
+                                      ClipRRect(
+                                        borderRadius: const BorderRadius.only(
+                                          topLeft: Radius.circular(10),
+                                          bottomLeft: Radius.circular(10),
+                                        ),
+                                        child: Image.network(
+                                          video.thumbnails.mediumResUrl,
+                                          width: 110,
+                                          height: 140,
+                                          fit: BoxFit.cover,
+                                        ),
+                                      ),
+                                      Positioned(
+                                        bottom: 5,
+                                        right: 5,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 4,
+                                            vertical: 1,
                                           ),
-                                          child: Image.network(
-                                            video.thumbnails.mediumResUrl,
-                                            width: 110,
-                                            height: 140,
-                                            fit: BoxFit.cover,
+                                          decoration: BoxDecoration(
+                                            color: Colors.black.withOpacity(
+                                              0.7,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              3,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            _formatDuration(video.duration),
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                            ),
                                           ),
                                         ),
-                                        Positioned(
-                                          bottom: 5,
-                                          right: 5,
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                                            decoration: BoxDecoration(
-                                              color: Colors.black.withOpacity(0.7),
-                                              borderRadius: BorderRadius.circular(3),
-                                            ),
-                                            child: Text(
-                                              _formatDuration(video.duration),
-                                              style: const TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 10,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                                      ),
+                                    ],
                                   ),
-                                  title: Text(
-                                    video.title,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                                  ),
-                                  subtitle: Text(
-                                    video.author,
-                                    style: const TextStyle(color: Colors.grey),
-                                  ),
-                                  onTap: () => _openPlayer(video),
                                 ),
-                              );
-                            },
-                          ),
+                                title: Text(
+                                  video.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                subtitle: Text(
+                                  video.author,
+                                  style: const TextStyle(color: Colors.grey),
+                                ),
+                                onTap: () => _openPlayer(video),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
               ),
             ],
           ),
 
-          // --- TAMBAHAN PROGRESS BAR GLOBAL DI SEARCH PAGE ---
+          // --- PROGRESS BAR GLOBAL ---
           Consumer<DownloadManager>(
             builder: (context, downloadMgr, child) {
               return downloadMgr.isDownloading
@@ -300,14 +385,19 @@ class _SearchResultPageState extends State<SearchResultPage> {
                       right: 10,
                       child: Container(
                         color: Colors.black.withOpacity(0.8),
-                        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 15,
+                          vertical: 8,
+                        ),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             LinearProgressIndicator(
                               value: downloadMgr.progress,
                               backgroundColor: Colors.transparent,
-                              valueColor: const AlwaysStoppedAnimation<Color>(Colors.pinkAccent),
+                              valueColor: const AlwaysStoppedAnimation<Color>(
+                                Colors.pinkAccent,
+                              ),
                               minHeight: 4,
                             ),
                             const SizedBox(height: 5),
@@ -316,14 +406,21 @@ class _SearchResultPageState extends State<SearchResultPage> {
                                 Expanded(
                                   child: Text(
                                     "Downloading ${downloadMgr.currentTask}...",
-                                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                    ),
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
                                 const SizedBox(width: 10),
                                 Text(
                                   "${(downloadMgr.progress * 100).toInt()}%",
-                                  style: const TextStyle(color: Colors.pinkAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                                  style: const TextStyle(
+                                    color: Colors.pinkAccent,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                               ],
                             ),
