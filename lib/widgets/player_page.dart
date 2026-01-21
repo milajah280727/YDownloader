@@ -5,6 +5,8 @@ import 'package:video_player/video_player.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../services/download_manager.dart';
+import 'package:provider/provider.dart';
+import '../providers/favorites_provider.dart'; // Import ini
 
 class MediaPlayerPage extends StatefulWidget {
   final VoidCallback? onBack;
@@ -221,10 +223,10 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildResolutionOption('360p'),
-            _buildResolutionOption('480p'),
-            _buildResolutionOption('720p'),
-            _buildResolutionOption('1080p'),
+            _buildResolutionOption('360'),
+            _buildResolutionOption('480'),
+            _buildResolutionOption('720'),
+            _buildResolutionOption('1080'),
           ],
         ),
       ),
@@ -243,6 +245,8 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
       ),
     );
   }
+
+    // ... bagian atas file tetap sama ...
 
   void _startVideoDownload(String quality) {
     if (widget.youtubeUrl == null || widget.baseUrl == null) {
@@ -265,6 +269,7 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
       url: downloadUrl,
       filename: safeTitle,
       type: 'video',
+      thumbnailUrl: widget.thumbnailUrl, // <--- KIRIM THUMBNAIL KE SINI
     ).then((_) {
        if(mounted) {
          ScaffoldMessenger.of(context).showSnackBar(
@@ -301,6 +306,7 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
       url: downloadUrl,
       filename: safeTitle,
       type: 'audio',
+      thumbnailUrl: widget.thumbnailUrl, // <--- KIRIM THUMBNAIL KE SINI
     ).then((_) {
       if(mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -316,14 +322,17 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
     });
   }
 
-  Widget _buildModeButtons() {
-    // --- PERUBAHAN: Jika file lokal, sembunyikan tombol switch mode ---
+  // ... sisa file tetap sama ...
+
+    Widget _buildModeButtons() {
+    // Cek jika file lokal, sembunyikan tombol switch mode & favorit (opsional)
     if (widget.localFilePath != null) {
       return const SizedBox.shrink();
     }
 
     return Row(
       children: [
+        // Tombol Video
         IconButton(
           onPressed: () => _toggleMode(true),
           icon: const Icon(Icons.videocam),
@@ -331,6 +340,7 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
           iconSize: 24,
         ),
         const SizedBox(width: 10),
+        // Tombol Audio
         IconButton(
           onPressed: () => _toggleMode(false),
           icon: const Icon(Icons.music_note),
@@ -338,6 +348,44 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
           iconSize: 24,
         ),
         const SizedBox(width: 10),
+
+        // --- TAMBAHAN: TOMBOL FAVORIT ---
+        Consumer<FavoritesProvider>(
+          builder: (context, favProvider, child) {
+            // Cek apakah video ini sudah difavoritkan
+            // Kita gunakan widget.youtubeUrl sebagai kunci unik
+            final isFav = favProvider.isFavorite(widget.youtubeUrl ?? '');
+            
+            return IconButton(
+              onPressed: () {
+                if (widget.youtubeUrl != null) {
+                  favProvider.toggleFavorite(
+                    youtubeUrl: widget.youtubeUrl!,
+                    title: widget.title ?? 'Tanpa Judul',
+                    thumbnailUrl: widget.thumbnailUrl ?? '',
+                  );
+                  
+                  // Feedback kecil (opsional)
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(isFav ? 'Dihapus dari Favorit' : 'Ditambahkan ke Favorit'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
+                }
+              },
+              icon: Icon(
+                isFav ? Icons.favorite : Icons.favorite_border,
+              ),
+              color: isFav ? Colors.pinkAccent : Colors.white70,
+              iconSize: 24,
+            );
+          },
+        ),
+        const SizedBox(width: 10),
+        // --------------------------------
+
+        // Tombol Download (More)
         if (widget.youtubeUrl != null)
           IconButton(
             onPressed: _showDownloadMenu,

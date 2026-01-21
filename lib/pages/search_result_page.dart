@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../widgets/player_page.dart';
 import 'package:provider/provider.dart';
 import '../services/download_manager.dart';
+import '../providers/history_provider.dart'; 
 
 class SearchResultPage extends StatefulWidget {
   final String searchQuery;
@@ -17,10 +18,17 @@ class SearchResultPage extends StatefulWidget {
 
 class _SearchResultPageState extends State<SearchResultPage> {
   late TextEditingController _searchController;
+  final ScrollController _scrollController = ScrollController();
 
   final YoutubeExplode _yt = YoutubeExplode();
+  
   List<Video> _videos = [];
   bool _isLoading = false;
+  bool _isLoadingMore = false;
+  bool _hasNext = true;
+  
+  VideoSearchList? _searchList; 
+  Iterator<Video>? _searchIterator; 
 
   String _baseUrl = '';
   final String _remoteConfigUrl =
@@ -30,6 +38,14 @@ class _SearchResultPageState extends State<SearchResultPage> {
   void initState() {
     super.initState();
     _searchController = TextEditingController(text: widget.searchQuery);
+    
+    _scrollController.addListener(() {
+      if (_scrollController.position.pixels >=
+          _scrollController.position.maxScrollExtent - 500) {
+        _loadMore();
+      }
+    });
+
     _fetchRemoteConfig();
     _performSearch(widget.searchQuery);
   }
@@ -38,22 +54,15 @@ class _SearchResultPageState extends State<SearchResultPage> {
   void dispose() {
     _searchController.dispose();
     _yt.close();
+    _scrollController.dispose();
     super.dispose();
   }
 
-  // Fungsi untuk mengambil URL Server dari Gist
   Future<void> _fetchRemoteConfig() async {
     try {
-      // --- TAMBAHKAN BARIS INI ---
-      // Kita tambahkan timestamp (waktu milidetik) di belakang URL
-      // agar setiap request dianggap unik dan tidak mengambil cache lama.
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final url = '$_remoteConfigUrl?t=$timestamp';
-      // ---------------------------
-
-      final response = await http
-          .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 3));
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 3));
 
       if (response.statusCode == 200) {
         final Map<String, dynamic> config = json.decode(response.body);
@@ -63,16 +72,11 @@ class _SearchResultPageState extends State<SearchResultPage> {
           setState(() {
             _baseUrl = newUrl;
           });
-          // Log ini akan muncul jika berhasil
-          print("✅ URL Server berhasil diperbarui: $newUrl");
-        } else {
-          print("⚠️ Format config salah atau api_base_url kosong");
+          debugPrint("✅ URL Server berhasil diperbarui: $newUrl");
         }
-      } else {
-        print("⚠️ Gagal mengambil config. Status code: ${response.statusCode}");
       }
     } catch (e) {
-      print("⚠️ Gagal refresh config: $e");
+      debugPrint("⚠️ Gagal refresh config: $e");
     }
   }
 
@@ -82,45 +86,72 @@ class _SearchResultPageState extends State<SearchResultPage> {
     setState(() {
       _isLoading = true;
       _videos = [];
+      _hasNext = true;
+      _searchIterator = null; 
     });
 
     try {
-      var searchResults = await _yt.search.search(query);
-      var videoList = searchResults.take(10).toList();
+      _searchList = await _yt.search.search(query);
+      _searchIterator = _searchList!.iterator;
+      await _loadMore(isInitial: true);
 
-      setState(() {
-        _videos = videoList;
-        _isLoading = false;
-      });
     } catch (e) {
-      print("Error searching: $e");
+      debugPrint("Error searching: $e");
       setState(() {
         _isLoading = false;
       });
     }
   }
 
-  // --- FUNGSI BARU UNTUK REFRESH ---
-  Future<void> _onRefresh() async {
-    // 1. Refresh Gist Config (Sesuai permintaan)
-    await _fetchRemoteConfig();
+  Future<void> _loadMore({bool isInitial = false}) async {
+    if (_isLoadingMore || !_hasNext) return;
 
-    // 2. Refresh hasil pencarian (Manual call tanpa _isLoading overlay
-    //    agar animasi RefreshIndicator terlihat jelas)
+    setState(() {
+      if (isInitial) {
+        _isLoading = true;
+      } else {
+        _isLoadingMore = true;
+      }
+    });
+
     try {
-      var searchResults = await _yt.search.search(_searchController.text);
-      var videoList = searchResults.take(10).toList();
+      int count = 0;
+      const int batchSize = 25;
 
-      setState(() {
-        _videos = videoList;
-      });
+      if (_searchIterator == null) return;
+
+      while (count < batchSize) {
+        if (_searchIterator!.moveNext()) {
+          final item = _searchIterator!.current;
+          _videos.add(item);
+          count++;
+        } else {
+          setState(() {
+            _hasNext = false;
+          });
+          break;
+        }
+      }
+
     } catch (e) {
-      print("Error saat refresh data: $e");
+      debugPrint("Error loading more: $e");
+    } finally {
+      setState(() {
+        _isLoading = false;
+        _isLoadingMore = false;
+      });
     }
+  }
+
+  Future<void> _onRefresh() async {
+    await _fetchRemoteConfig();
+    await _performSearch(_searchController.text);
   }
 
   Future<void> _openPlayer(Video video) async {
-    // Tampilkan loading indicator
+    // Tambah ke histori
+    Provider.of<HistoryProvider>(context, listen: false).addToHistory(video, _baseUrl);
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -129,7 +160,6 @@ class _SearchResultPageState extends State<SearchResultPage> {
       ),
     );
 
-    // OTOMATIS REFRESH GIST saat user klik video
     await _fetchRemoteConfig();
 
     if (mounted) Navigator.pop(context);
@@ -232,7 +262,6 @@ class _SearchResultPageState extends State<SearchResultPage> {
                 ),
               ),
 
-              // Tampilan Status URL
               if (_baseUrl.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.symmetric(
@@ -262,120 +291,154 @@ class _SearchResultPageState extends State<SearchResultPage> {
                 ),
 
               Expanded(
-                child: _isLoading
+                child: _isLoading && _videos.isEmpty
                     ? const Center(
                         child: CircularProgressIndicator(
                           color: Colors.pinkAccent,
                         ),
                       )
                     : _videos.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(
-                              Icons.search_off,
-                              size: 80,
-                              color: Colors.grey,
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(
+                                  Icons.search_off,
+                                  size: 80,
+                                  color: Colors.grey,
+                                ),
+                                const SizedBox(height: 20),
+                                const Text(
+                                  'Tidak ada hasil ditemukan',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 20),
-                            const Text(
-                              'Tidak ada hasil ditemukan',
-                              style: TextStyle(color: Colors.white),
-                            ),
-                          ],
-                        ),
-                      )
-                    : // --- WRAPPER REFRESH INDICATOR DITAMBAHKAN DISINI ---
-                      RefreshIndicator(
-                        onRefresh: _onRefresh,
-                        color:
-                            Colors.pinkAccent, // Warna ikon loading sesuai tema
-                        backgroundColor:
-                            Colors.grey[900], // Warna background lingkaran
-                        child: ListView.builder(
-                          padding: const EdgeInsets.all(10),
-                          itemCount: _videos.length,
-                          itemBuilder: (context, index) {
-                            final video = _videos[index];
-                            return Card(
-                              color: Colors.grey[900],
-                              margin: const EdgeInsets.only(bottom: 10),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: SizedBox(
-                                  width: 110,
-                                  height: 140,
-                                  child: Stack(
-                                    children: [
-                                      ClipRRect(
-                                        borderRadius: const BorderRadius.only(
-                                          topLeft: Radius.circular(10),
-                                          bottomLeft: Radius.circular(10),
-                                        ),
-                                        child: Image.network(
-                                          video.thumbnails.mediumResUrl,
-                                          width: 110,
-                                          height: 140,
-                                          fit: BoxFit.cover,
+                          )
+                        : RefreshIndicator(
+                            onRefresh: _onRefresh,
+                            color: Colors.pinkAccent,
+                            backgroundColor: Colors.grey[900],
+                            child: ListView.builder(
+                              controller: _scrollController,
+                              padding: const EdgeInsets.only(left: 10, right: 10, bottom: 10),
+                              itemCount: _videos.length + 1, 
+                              itemBuilder: (context, index) {
+                                // Logic Loading Indicator
+                                if (index == _videos.length) {
+                                  if (_isLoadingMore && _hasNext) {
+                                    return const Padding(
+                                      padding: EdgeInsets.all(20.0),
+                                      child: Center(
+                                        child: SizedBox(
+                                          width: 30, 
+                                          height: 30, 
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2, 
+                                            color: Colors.pinkAccent
+                                          )
                                         ),
                                       ),
-                                      Positioned(
-                                        bottom: 5,
-                                        right: 5,
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 4,
-                                            vertical: 1,
+                                    );
+                                  } else {
+                                    return const Padding(
+                                      padding: EdgeInsets.all(20.0),
+                                      child: Center(
+                                        child: Text(
+                                          "Sudah mencapai akhir pencarian",
+                                          style: TextStyle(color: Colors.grey),
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                }
+
+                                final video = _videos[index];
+                                
+                                // UI STYLE HORIZONTAL
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 15),
+                                  child: Row(
+                                    children: [
+                                      // Thumbnail di Kiri
+                                      GestureDetector(
+                                        onTap: () => _openPlayer(video),
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(10),
+                                          child: Stack(
+                                            children: [
+                                              Image.network(
+                                                video.thumbnails.mediumResUrl,
+                                                width: 120,
+                                                height: 90,
+                                                fit: BoxFit.cover,
+                                                errorBuilder: (c, o, s) => Container(
+                                                  width: 120,
+                                                  height: 90,
+                                                  color: Colors.grey[800],
+                                                  child: const Icon(Icons.broken_image, color: Colors.grey),
+                                                ),
+                                              ),
+                                              Positioned(
+                                                bottom: 5,
+                                                right: 5,
+                                                child: Container(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.black.withOpacity(0.8),
+                                                    borderRadius: BorderRadius.circular(3),
+                                                  ),
+                                                  child: Text(
+                                                    _formatDuration(video.duration),
+                                                    style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
                                           ),
-                                          decoration: BoxDecoration(
-                                            color: Colors.black.withOpacity(
-                                              0.7,
-                                            ),
-                                            borderRadius: BorderRadius.circular(
-                                              3,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            _formatDuration(video.duration),
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.bold,
-                                            ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 15),
+                                      
+                                      // Detail di Kanan
+                                      Expanded(
+                                        child: GestureDetector(
+                                          onTap: () => _openPlayer(video),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                video.title,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 15,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 5),
+                                              Text(
+                                                video.author,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(color: Colors.grey, fontSize: 12),
+                                              ),
+                                            ],
                                           ),
                                         ),
                                       ),
                                     ],
                                   ),
-                                ),
-                                title: Text(
-                                  video.title,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                subtitle: Text(
-                                  video.author,
-                                  style: const TextStyle(color: Colors.grey),
-                                ),
-                                onTap: () => _openPlayer(video),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
+                                );
+                              },
+                            ),
+                          ),
               ),
             ],
           ),
 
-          // --- PROGRESS BAR GLOBAL ---
+          // Widget Download (Tetap di bawah)
           Consumer<DownloadManager>(
             builder: (context, downloadMgr, child) {
               return downloadMgr.isDownloading
@@ -384,7 +447,7 @@ class _SearchResultPageState extends State<SearchResultPage> {
                       left: 10,
                       right: 10,
                       child: Container(
-                        color: Colors.black.withOpacity(0.8),
+                        color: Colors.black.withValues(alpha: 0.8),
                         padding: const EdgeInsets.symmetric(
                           horizontal: 15,
                           vertical: 8,

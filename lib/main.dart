@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_nav_bar/google_nav_bar.dart';
 import 'package:line_icons/line_icons.dart';
 import 'package:provider/provider.dart';
-import 'package:permission_handler/permission_handler.dart'; // Import paket izin
+import 'package:permission_handler/permission_handler.dart'; 
 
 import 'pages/home_page.dart';
 import 'pages/music_page.dart';
@@ -13,6 +13,8 @@ import 'pages/download_page.dart';
 import 'widgets/player_page.dart';
 import 'pages/search_page.dart';
 import 'providers/search_provider.dart';
+import 'providers/history_provider.dart';
+import 'providers/favorites_provider.dart'; // <--- 1. TAMBAHKAN IMPORT INI
 import 'services/download_manager.dart';
 
 void main() {
@@ -28,13 +30,26 @@ class MyApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => SearchProvider()),
         ChangeNotifierProvider(create: (_) => DownloadManager()),
+        ChangeNotifierProvider(create: (_) => HistoryProvider()),
+        ChangeNotifierProvider(create: (_) => FavoritesProvider()), // <--- 2. DAFTARKAN PROVIDER DI SINI
       ],
       child: MaterialApp(
         title: 'My App',
+        debugShowCheckedModeBanner: false,
         theme: ThemeData(
+          scaffoldBackgroundColor: const Color.fromARGB(255, 26, 26, 26),
+          brightness: Brightness.dark,
           primaryColor: Colors.grey[800],
-          colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: Colors.deepPurple,
+            brightness: Brightness.dark, 
+          ),
           useMaterial3: true,
+          pageTransitionsTheme: const PageTransitionsTheme(
+            builders: {
+              TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+            },
+          ),
         ),
         home: const MainPage(),
       ),
@@ -54,8 +69,6 @@ class _MainPageState extends State<MainPage> {
   final PageController _pageController = PageController();
   bool _showPlayer = false;
   bool _isPlayerFullscreen = false;
-
-  // --- VARIABEL IZIN ---
   bool _hasCheckedPermission = false; 
 
   void _handleFullScreenChanged(bool isFull) {
@@ -101,14 +114,11 @@ class _MainPageState extends State<MainPage> {
   }
 
   
-  // --- FUNGSI CEK IZIN (SUDAH DIPERBARUI) ---
   Future<void> _checkPermissions() async {
-    // Cek status spesifik untuk video dan audio (penting untuk Android 13+)
     final videoStatus = await Permission.videos.status;
     final audioStatus = await Permission.audio.status;
-    final photosStatus = await Permission.photos.status; // Kadang perlu juga
+    final photosStatus = await Permission.photos.status; 
 
-    // Jika video/audio belum granted (dan bukan limited), tampilkan dialog
     if (!(videoStatus.isGranted || videoStatus.isLimited) || !(audioStatus.isGranted)) {
       if (mounted) {
         _showPermissionDialog();
@@ -119,7 +129,7 @@ class _MainPageState extends State<MainPage> {
   void _showPermissionDialog() {
     showDialog(
       context: context,
-      barrierDismissible: false, // Tidak bisa ditutup dengan klik di luar
+      barrierDismissible: false, 
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF2E2E2E),
         title: const Text(
@@ -133,32 +143,26 @@ class _MainPageState extends State<MainPage> {
         actions: [
           TextButton(
             onPressed: () {
-              // Tutup dialog (Tidak disarankan jika butuh download)
               Navigator.pop(context);
             },
             child: const Text('Nanti', style: TextStyle(color: Colors.grey)),
           ),
           ElevatedButton(
             onPressed: () async {
-              Navigator.pop(context); // Tutup dialog custom
+              Navigator.pop(context); 
 
-              // --- LOGIKA PERMINTA IZIN BARU (GRANULAR) ---
-              // Meminta izin secara spesifik (Video & Audio) agar popup sistem muncul
               Map<Permission, PermissionStatus> statuses = await [
                 Permission.photos,
                 Permission.videos,
                 Permission.audio,
               ].request();
 
-              // Ambil status video untuk dijadikan patokan utama
               final videoResult = statuses[Permission.videos];
               
               if (mounted) {
                 if (videoResult != null && videoResult.isPermanentlyDenied) {
-                   // Jika user centang "Jangan tanya lagi" (Don't ask again)
                    _showOpenSettingsDialog();
                 } else if (videoResult != null && videoResult.isDenied) {
-                  // Jika user klik "Tolak" biasa
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text('Izin ditolak. Tanpa izin ini, file tidak dapat disimpan.'),
@@ -166,7 +170,6 @@ class _MainPageState extends State<MainPage> {
                     ),
                   );
                 } else {
-                  // Granted (Berhasil)
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text('Izin berhasil diberikan!'),
@@ -204,7 +207,7 @@ class _MainPageState extends State<MainPage> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              openAppSettings(); // Membuka halaman pengaturan HP
+              openAppSettings(); 
             },
             child: const Text('Buka Pengaturan', style: TextStyle(color: Colors.pinkAccent)),
           ),
@@ -216,7 +219,6 @@ class _MainPageState extends State<MainPage> {
   @override
   void initState() {
     super.initState();
-    // Panggil fungsi cek izin saat awal
     _checkPermissions();
   }
 
