@@ -67,7 +67,6 @@ class _DownloadPageState extends State<DownloadPage> with AutomaticKeepAliveClie
   }
 
   // Helper untuk ambil path file gambar berdasarkan nama file mp4/mp3
-  // contoh: "lagu.mp3" -> "lagu.jpg"
   String _getThumbnailPath(String mainFilePath) {
     return mainFilePath.replaceAll(RegExp(r'\.\w+$'), '.jpg');
   }
@@ -131,25 +130,19 @@ class _DownloadPageState extends State<DownloadPage> with AutomaticKeepAliveClie
     );
   }
 
-  // --- FUNGSI THUMBNAIL UPDATE ---
+  // --- FUNGSI THUMBNAIL OPTIMASI ---
   Future<Uint8List?> _getThumbnail(String path, String type) async {
-    // 1. Cek apakah ada file gambar .jpg yang terdownload
+    // 1. Cek lagi di dalam fungsi async (double check)
     String thumbPath = _getThumbnailPath(path);
     File thumbFile = File(thumbPath);
 
     if (await thumbFile.exists()) {
-      debugPrint("✅ Menggunakan thumbnail lokal: $thumbPath");
-      try {
-        return await thumbFile.readAsBytes();
-      } catch (e) {
-        debugPrint("Gagal baca thumbnail lokal: $e");
-      }
+      return await thumbFile.readAsBytes();
     }
 
-    // 2. Fallback: Jika tidak ada file jpg
+    // 2. Fallback: Generate baru (Berat, tapi dilakukan di FutureBuilder)
     try {
       if (type == 'video') {
-        // Generate thumbnail dari video
         return await VideoThumbnail.thumbnailData(
           video: path,
           imageFormat: ImageFormat.JPEG,
@@ -157,7 +150,6 @@ class _DownloadPageState extends State<DownloadPage> with AutomaticKeepAliveClie
           quality: 75,
         );
       } else {
-        // Coba metadata (Opsional, karena kita sudah download gambar di awal)
         final metadata = await meta.MetadataGod.readMetadata(file: path);
         return metadata.picture?.data; 
       }
@@ -187,140 +179,170 @@ class _DownloadPageState extends State<DownloadPage> with AutomaticKeepAliveClie
     
     return Scaffold(
       backgroundColor: const Color.fromARGB(255, 26, 26, 26),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Colors.pinkAccent))
-          : RefreshIndicator(
-              onRefresh: _loadDownloadedFiles,
-              child: _files.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+      // --- LOGIKA BARU: SELALU GUNAKAN LISTVIEW ---
+      body: RefreshIndicator(
+        onRefresh: _loadDownloadedFiles, // Refresh tetap bekerja meski kosong
+        color: Colors.pinkAccent,
+        backgroundColor: Colors.grey[900],
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator(color: Colors.pinkAccent))
+            : MediaQuery.removePadding(
+                context: context,
+                removeTop: true,
+                child: ListView.builder(
+                  padding: const EdgeInsets.only(left: 10, right: 10, bottom: 10),
+                  // JIKA KOSONG, COUNT = 1 (UNTUK UI KOSONG), JIKA ADA, COUNT = PANJANG LIST
+                  itemCount: _files.isEmpty ? 1 : _files.length,
+                  itemBuilder: (context, index) {
+                    // JIKA FILE KOSONG, RENDER WIDGET "BELUM ADA UNDUHAN"
+                    if (_files.isEmpty) {
+                      return SizedBox(
+                        // Beri tinggi agar bisa discroll (penting untuk RefreshIndicator)
+                        height: MediaQuery.of(context).size.height - 100, 
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.download_done_outlined, size: 80, color: Colors.grey[600]),
+                            const SizedBox(height: 20),
+                            const Text('Belum ada unduhan', style: TextStyle(color: Colors.white, fontSize: 18)),
+                            const SizedBox(height: 10),
+                            Text('Disimpan di: /Download/Ydownloader', style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+                            const SizedBox(height: 20),
+                            Text('Tarik ke bawah untuk memperbarui', style: TextStyle(color: Colors.grey[700], fontSize: 12, fontStyle: FontStyle.italic)),
+                          ],
+                        ),
+                      );
+                    }
+
+                    // LOGIKA LIST FILE YANG ADA (OPTIMASI DI SINI)
+                    final file = _files[index] as File;
+                    final fileName = _getFileName(file.path);
+                    final type = _getFileType(file.path);
+                    
+                    // Logic Cek Thumbnail Cepat
+                    String thumbPath = _getThumbnailPath(file.path);
+                    File thumbFile = File(thumbPath);
+                    bool thumbExists = thumbFile.existsSync();
+                    
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 15),
+                      child: Row(
                         children: [
-                          Icon(Icons.download_done_outlined, size: 80, color: Colors.grey[600]),
-                          const SizedBox(height: 20),
-                          const Text('Belum ada unduhan', style: TextStyle(color: Colors.white, fontSize: 18)),
-                          const SizedBox(height: 10),
-                          Text('Disimpan di: /Download/Ydownloader', style: TextStyle(color: Colors.grey[500], fontSize: 12)),
-                        ],
-                      ),
-                    )
-                  : MediaQuery.removePadding(
-                      context: context,
-                      removeTop: true,
-                      child: ListView.builder(
-                        padding: const EdgeInsets.only(left: 10, right: 10, bottom: 10),
-                        itemCount: _files.length,
-                        itemBuilder: (context, index) {
-                          final file = _files[index] as File;
-                          final fileName = _getFileName(file.path);
-                          final type = _getFileType(file.path);
-                          
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 15),
-                            child: Row(
-                              children: [
-                                // Thumbnail (Kiri)
-                                GestureDetector(
-                                  onTap: () => _playFile(file),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(10),
-                                    child: SizedBox(
-                                      width: 120,
-                                      height: 90,
-                                      child: Stack(
-                                        children: [
-                                          FutureBuilder<Uint8List?>(
-                                            future: _getThumbnail(file.path, type),
-                                            builder: (context, snapshot) {
-                                              if (snapshot.connectionState == ConnectionState.done && snapshot.data != null) {
-                                                return Image.memory(
-                                                  snapshot.data!,
-                                                  width: 120,
-                                                  height: 90,
-                                                  fit: BoxFit.cover,
-                                                );
-                                              } else if (snapshot.connectionState == ConnectionState.waiting) {
-                                                return Container(
-                                                  width: 120,
-                                                  height: 90,
-                                                  color: Colors.grey[800],
-                                                  child: const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
-                                                );
-                                              } else {
-                                                return Container(
-                                                  width: 120,
-                                                  height: 90,
-                                                  color: Colors.grey[800],
-                                                  child: Icon(
-                                                    type == 'video' ? Icons.broken_image : Icons.music_note,
-                                                    color: Colors.white70,
-                                                  ),
-                                                );
-                                              }
-                                            },
-                                          ),
-                                          const Positioned(
-                                            top: 0,
-                                            left: 0,
-                                            right: 0,
-                                            bottom: 0,
-                                            child: Center(
-                                              child: Icon(Icons.play_circle_outline, color: Colors.white70, size: 40),
-                                            ),
-                                          ),
-                                        ],
+                          // Thumbnail (Kiri)
+                          GestureDetector(
+                            onTap: () => _playFile(file),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: SizedBox(
+                                width: 120,
+                                height: 90,
+                                child: Stack(
+                                  children: [
+                                    // JIKA THUMBNAIL SUDAH ADA DI FILE, GUNAKAN IMAGE.FILE (RINGAN)
+                                    if (thumbExists)
+                                      Image.file(
+                                        thumbFile,
+                                        width: 120,
+                                        height: 90,
+                                        fit: BoxFit.cover,
+                                        cacheWidth: 120,
+                                        cacheHeight: 90,
+                                      )
+                                    // JIKA BELUM ADA, GENERATE BARU (BERAT, TAPI DILAKUKAN DI FUTURE BUILDER)
+                                    else
+                                      FutureBuilder<Uint8List?>(
+                                        future: _getThumbnail(file.path, type),
+                                        builder: (context, snapshot) {
+                                          if (snapshot.connectionState == ConnectionState.done && snapshot.data != null) {
+                                            return Image.memory(
+                                              snapshot.data!,
+                                              width: 120,
+                                              height: 90,
+                                              fit: BoxFit.cover,
+                                            );
+                                          } else if (snapshot.connectionState == ConnectionState.waiting) {
+                                            return Container(
+                                              width: 120,
+                                              height: 90,
+                                              color: Colors.grey[800],
+                                              child: const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
+                                            );
+                                          } else {
+                                            return Container(
+                                              width: 120,
+                                              height: 90,
+                                              color: Colors.grey[800],
+                                              child: Icon(
+                                                type == 'video' ? Icons.broken_image : Icons.music_note,
+                                                color: Colors.white70,
+                                              ),
+                                            );
+                                          }
+                                        },
+                                      ),
+                                    // Icon Play Overlay
+                                    const Positioned(
+                                      top: 0,
+                                      left: 0,
+                                      right: 0,
+                                      bottom: 0,
+                                      child: Center(
+                                        child: Icon(Icons.play_circle_outline, color: Colors.white70, size: 40),
                                       ),
                                     ),
-                                  ),
+                                  ],
                                 ),
-                                const SizedBox(width: 15),
-                                
-                                // Detail (Tengah)
-                                Expanded(
-                                  child: GestureDetector(
-                                    onTap: () => _playFile(file),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          fileName,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 15,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 5),
-                                        Text(
-                                          _getFileSize(file),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(color: Colors.grey, fontSize: 12),
-                                        ),
-                                        const SizedBox(height: 5),
-                                        Text(
-                                          type == 'video' ? 'MP4 Video File' : 'MP3 Audio File',
-                                          style: const TextStyle(color: Colors.pinkAccent, fontSize: 11),
-                                        ),
-                                      ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 15),
+                          
+                          // Detail (Tengah)
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () => _playFile(file),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    fileName,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15,
                                     ),
                                   ),
-                                ),
-                                
-                                // Tombol Hapus (Kanan)
-                                IconButton(
-                                  icon: const Icon(Icons.delete_outline, color: Colors.grey, size: 20),
-                                  onPressed: () => _deleteFile(file),
-                                ),
-                              ],
+                                  const SizedBox(height: 5),
+                                  Text(
+                                    _getFileSize(file),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                                  ),
+                                  const SizedBox(height: 5),
+                                  Text(
+                                    type == 'video' ? 'MP4 Video File' : 'MP3 Audio File',
+                                    style: const TextStyle(color: Colors.pinkAccent, fontSize: 11),
+                                  ),
+                                ],
+                              ),
                             ),
-                          );
-                        },
+                          ),
+                          
+                          // Tombol Hapus (Kanan)
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, color: Colors.grey, size: 20),
+                            onPressed: () => _deleteFile(file),
+                          ),
+                        ],
                       ),
-                    ),
-            ),
+                    );
+                  },
+                ),
+              ),
+      ),
     );
   }
 }

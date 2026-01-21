@@ -16,9 +16,9 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     
     <application
-        android:label="ydownloader"
+        android:label="YDownloader"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@mipmap/launcher_icon"
         android:usesCleartextTraffic="true"
         android:requestLegacyExternalStorage="true"> <!-- Tambahkan ini untuk Android 11+ -->
         <activity
