@@ -237,7 +237,7 @@ class _SearchPageState extends State<SearchPage> {
             right: 0,
             bottom: 0,
             // child: MiniPlayerWidget(), // Ganti baris ini dengan widget asli Anda
-            child: SizedBox(height: 60, child: Center(child: Text("Mini Player Area", style: TextStyle(color: Colors.white30)))),
+            child: Text("", style: TextStyle(color: Colors.white30)),
           ),
         ],
       ),

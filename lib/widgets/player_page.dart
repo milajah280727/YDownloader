@@ -1,17 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart'; 
 import 'package:video_player/video_player.dart';
 import 'package:flutter/services.dart';
 
 class MediaPlayerPage extends StatefulWidget {
-  // Callback untuk kembali ke home
   final VoidCallback? onBack;
-  // Callback untuk memberi tahu main.dart jika fullscreen aktif/nonaktif
   final Function(bool)? onFullScreenChanged;
   
-  // Parameter URL dari pencarian
   final String? customVideoUrl;
-  final String? customAudioUrl;
-  // Parameter Thumbnail & Judul
+  final String? customAudioUrl; 
   final String? thumbnailUrl;
   final String? title;
 
@@ -20,7 +17,7 @@ class MediaPlayerPage extends StatefulWidget {
     this.onBack, 
     this.onFullScreenChanged, 
     this.customVideoUrl, 
-    this.customAudioUrl,
+    this.customAudioUrl, 
     this.thumbnailUrl,
     this.title
   });
@@ -29,50 +26,53 @@ class MediaPlayerPage extends StatefulWidget {
   State<MediaPlayerPage> createState() => _MediaPlayerPageState();
 }
 
+// --- CUSTOM SLIDER TRACK SHAPE ---
+class _CustomSliderTrackShape extends RectangularSliderTrackShape {
+  const _CustomSliderTrackShape();
+
+  @override
+  Rect getPreferredRect({
+    required RenderBox parentBox,
+    Offset offset = Offset.zero,
+    required SliderThemeData sliderTheme,
+    bool isEnabled = false,
+    bool isDiscrete = false,
+  }) {
+    final double trackHeight = sliderTheme.trackHeight ?? 4.0;
+    final double trackLeft = offset.dx; 
+    final double trackTop = offset.dy + (parentBox.size.height - trackHeight) / 2;
+    final double trackWidth = parentBox.size.width; 
+    
+    return Rect.fromLTWH(trackLeft, trackTop, trackWidth, trackHeight);
+  }
+}
+
 class _MediaPlayerPageState extends State<MediaPlayerPage> {
+  // --- HANYA SATU CONTROLLER (VIDEO) ---
   late VideoPlayerController _videoController;
-  late VideoPlayerController _audioController;
-  bool _isVideoMode = true;
-  bool _isFullScreen = false;
-
-  // State untuk slider mode (0 = Video, 1 = Audio)
-  int _modeSegment = 0; 
-
-  // State untuk mengontrol visibilitas overlay di fullscreen
-  bool _showControlsOverlay = true;
   
-  // State untuk Repeat (Loop)
+  bool _isVideoMode = false; // Default Audio Mode
+  bool _isFullScreen = false;
+  bool _showControlsOverlay = true;
   bool _isRepeating = false;
 
-  // --- KONFIGURASI WARNA PINK AKSEN ---
   static const Color _accentColor = Color.fromARGB(255, 248, 106, 154);
 
   @override
   void initState() {
     super.initState();
     
-    // Cek apakah ada custom URL (dari pencarian), jika tidak gunakan default
     String vidUrl = widget.customVideoUrl ?? 'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4';
-    String audUrl = widget.customAudioUrl ?? 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
 
-    // INISIALISASI BERSAMAAN
     _videoController = VideoPlayerController.networkUrl(Uri.parse(vidUrl));
-    _audioController = VideoPlayerController.networkUrl(Uri.parse(audUrl));
 
     _videoController.addListener(() {
       setState(() {});
     });
-    _audioController.addListener(() {
-      setState(() {});
-    });
 
-    Future.wait([
-      _videoController.initialize(),
-      _audioController.initialize(),
-    ]).then((_) {
+    _videoController.initialize().then((_) {
       setState(() {
         _videoController.setLooping(_isRepeating);
-        _audioController.setLooping(_isRepeating);
       });
     });
   }
@@ -80,16 +80,20 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
   @override
   void dispose() {
     _videoController.removeListener(() {});
-    _audioController.removeListener(() {});
     _videoController.dispose();
-    _audioController.dispose();
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
 
   VideoPlayerController get _activeController {
-    return _isVideoMode ? _videoController : _audioController;
+    return _videoController;
+  }
+  
+  Duration _getBufferedEnd(VideoPlayerValue value) {
+    final ranges = value.buffered;
+    if (ranges.isEmpty) return Duration.zero;
+    return ranges.last.end;
   }
 
   void _toggleFullScreen() {
@@ -117,74 +121,106 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
   void _toggleMode(bool isVideo) {
     if (_isVideoMode == isVideo) return; 
 
-    // Update state slider agar ikon bergerak
-    setState(() {
-      _modeSegment = isVideo ? 0 : 1; // 0 Video, 1 Audio
-    });
-
-    // Simpan status dan posisi
-    final wasPlaying = _activeController.value.isPlaying;
-    final currentPosition = _activeController.value.position;
-
-    _videoController.pause();
-    _audioController.pause();
-
     setState(() {
       _isVideoMode = isVideo;
-    });
-
-    // Sinkronisasi posisi
-    Future.microtask(() {
-      if (_activeController.value.isInitialized) {
-        _activeController.seekTo(currentPosition);
-        if (wasPlaying) {
-          _activeController.play();
-        }
-      }
     });
   }
 
   void _toggleRepeat() {
     setState(() {
       _isRepeating = !_isRepeating;
-      _activeController.setLooping(_isRepeating);
+      _videoController.setLooping(_isRepeating);
     });
   }
 
-  // Widget Slider Mode (Dipisah agar bisa dipanggil di beberapa tempat)
-  Widget _buildModeSegment() {
-    return SizedBox(
-      width: 160, // Lebar tetap agar rapi
-      child: SegmentedButton<int>(
-        style: ButtonStyle(
-          backgroundColor: MaterialStateProperty.resolveWith<Color>((Set<MaterialState> states) {
-            if (states.contains(MaterialState.selected)) {
-              return _accentColor; 
-            }
-            return Colors.white.withOpacity(0.15);
-          }),
-          iconColor: MaterialStateProperty.all(Colors.white),
-          padding: MaterialStateProperty.all(EdgeInsets.symmetric(horizontal: 8)),
+  // --- WIDGET UNTUK TOOMBOL MODE (IKON TANPA CEKLIS) ---
+  Widget _buildModeButtons() {
+    return Row(
+      children: [
+        // Tombol Video
+        IconButton(
+          onPressed: () => _toggleMode(true),
+          icon: const Icon(Icons.videocam),
+          color: _isVideoMode ? _accentColor : Colors.white70,
+          iconSize: 24,
         ),
-        segments: const [
-          ButtonSegment<int>(
-            value: 0,
-            icon: Icon(Icons.videocam, size: 18),
-            label: Text('Video', style: TextStyle(fontSize: 12, color: Colors.white)),
+        const SizedBox(width: 10),
+        // Tombol Audio
+        IconButton(
+          onPressed: () => _toggleMode(false),
+          icon: const Icon(Icons.music_note),
+          color: !_isVideoMode ? _accentColor : Colors.white70,
+          iconSize: 24,
+        ),
+      ],
+    );
+  }
+
+  // --- CUSTOM PROGRESS BAR ---
+  Widget _buildCustomProgressBar() {
+    return SizedBox(
+      width: double.infinity,
+      height: 4, 
+      child: Stack(
+        alignment: Alignment.centerLeft, 
+        children: [
+          Container(
+            width: double.infinity,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2), 
+              borderRadius: BorderRadius.circular(2),
+            ),
           ),
-          ButtonSegment<int>(
-            value: 1,
-            icon: Icon(Icons.music_note, size: 18),
-            label: Text('Audio', style: TextStyle(fontSize: 12, color: Colors.white)),
+
+          ValueListenableBuilder(
+            valueListenable: _activeController,
+            builder: (context, VideoPlayerValue value, child) {
+              final bufferedEnd = _getBufferedEnd(value);
+              final totalDuration = value.duration;
+              final progress = totalDuration.inMilliseconds > 0 
+                  ? (bufferedEnd.inMilliseconds / totalDuration.inMilliseconds).clamp(0.0, 1.0) 
+                  : 0.0;
+
+              return FractionallySizedBox(
+                widthFactor: progress,
+                alignment: Alignment.centerLeft,
+                child: Container(
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.5), 
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              );
+            },
+          ),
+
+          ValueListenableBuilder(
+            valueListenable: _activeController,
+            builder: (context, VideoPlayerValue value, child) {
+              return SliderTheme(
+                data: SliderThemeData(
+                  trackHeight: 4,
+                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 15),
+                  trackShape: const _CustomSliderTrackShape(),
+                  inactiveTrackColor: Colors.transparent,
+                  activeTrackColor: _accentColor,
+                  thumbColor: (_accentColor),
+                  overlayColor: (_accentColor.withOpacity(0.2)),
+                ),
+                child: Slider(
+                  value: value.position.inSeconds.toDouble(),
+                  max: value.duration.inSeconds.toDouble(),
+                  onChanged: (double newValue) {
+                    _activeController.seekTo(Duration(seconds: newValue.toInt()));
+                  },
+                ),
+              );
+            },
           ),
         ],
-        selected: {_modeSegment},
-        onSelectionChanged: (Set<int> newSelection) {
-          setState(() {
-            _modeSegment = newSelection.first;
-            _toggleMode(_modeSegment == 0);
-          });
-        },
       ),
     );
   }
@@ -196,45 +232,52 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
     }
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: const Color.fromARGB(0, 75, 75, 75), // Transparan/Hitam Pudar
-        elevation: 0,
-        // Title dihapus
-        leading: widget.onBack != null
-            ? IconButton(
-                // Icon back diubah jadi putih
-                icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
-                onPressed: widget.onBack,
-              )
-            : null,
-        // Actions dihapus karena slider pindah ke body
-      ),
+      appBar: null, // AppBar dihapus, kita buat custom top bar
       body: _buildNormalView(),
     );
   }
 
-  // --- TAMPILAN NORMAL ---
   Widget _buildNormalView() {
     return Column(
       children: [
-        // 1. Slider Mode Dipindahkan ke Atas Tengah Body
-        Padding(
-          padding: const EdgeInsets.only(top: 10.0),
-          child: Center(child: _buildModeSegment()),
+        // --- CUSTOM TOP BAR (SEJAJAR BACK BUTTON & MODE) ---
+        SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            child: Row(
+              children: [
+                // Tombol Kembali di Kiri
+                if (widget.onBack != null)
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
+                    onPressed: widget.onBack,
+                  ),
+                
+                // Spacer agar mode tombol ada di kanan (atau tengah jika diinginkan)
+                const Spacer(),
+                
+                // Tombol Mode (Video & Audio)
+                _buildModeButtons(),
+                
+                const SizedBox(width: 10), // Padding kanan
+              ],
+            ),
+          ),
         ),
         
-        // 2. Area Visual
+        // --- VISUAL AREA (VIDEO & THUMBNAIL) ---
         Expanded(
           child: Align(
-            alignment: Alignment.topCenter,
+            alignment: Alignment.center,
             child: Padding(
-              padding: const EdgeInsets.only(top: 20.0),
+              padding: const EdgeInsets.all(0.0),
               child: _buildVisualArea(isFull: false),
             ),
           ),
         ),
         
-        // 3. Kontrol Bawah
+        // --- BOTTOM CONTROLS ---
         Container(
           padding: const EdgeInsets.only(bottom: 30.0, left: 20, right: 20, top: 20),
           decoration: BoxDecoration(
@@ -247,13 +290,17 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
     );
   }
 
-  // --- TAMPILAN FULLSCREEN ---
-  Widget _buildFullScreenView() {
+    Widget _buildFullScreenView() {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
+        // --- TAMBAHKAN BARIS INI ---
+        alignment: Alignment.center, 
+        // ---------------------------
+        
         children: [
           _buildVisualArea(isFull: true),
+          
           if (_showControlsOverlay)
             GestureDetector(
               onTap: () {
@@ -284,58 +331,37 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
     );
   }
 
-  Widget _buildVisualArea({required bool isFull}) {
+    Widget _buildVisualArea({required bool isFull}) {
     final controller = _activeController;
 
     if (!controller.value.isInitialized) {
       return const Center(child: CircularProgressIndicator(color: Colors.white));
     }
 
-    if (_isVideoMode) {
-      if (isFull) {
-        return Center(
-          child: AspectRatio(
-            aspectRatio: controller.value.aspectRatio,
-            child: VideoPlayer(controller),
-          ),
-        );
-      } else {
-        return AspectRatio(
-          aspectRatio: controller.value.aspectRatio,
-          child: VideoPlayer(controller),
-        );
-      }
-    } else {
-      double size = isFull ? 150 : 200;
-      bool hasThumbnail = widget.thumbnailUrl != null && widget.thumbnailUrl!.isNotEmpty;
-
-      return Center(
-        child: Container(
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            color: hasThumbnail ? Colors.transparent : _accentColor,
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: _accentColor.withOpacity(0.5),
-                blurRadius: 20,
-                spreadRadius: 5,
+    return AspectRatio(
+      aspectRatio: controller.value.aspectRatio,
+      child: _isVideoMode
+          ? VideoPlayer(controller) // Video otomatis mengikuti AspectRatio controller
+          : Container(
+              // Tampilkan Thumbnail
+              width: double.infinity,
+              height: double.infinity,
+              decoration: BoxDecoration(
+                color: Colors.black, // Tambahkan background hitam agar konten kontras
+                image: widget.thumbnailUrl != null && widget.thumbnailUrl!.isNotEmpty
+                    ? DecorationImage(
+                        image: NetworkImage(widget.thumbnailUrl!),
+                        // --- UBAH BARIS INI ---
+                        fit: BoxFit.contain, 
+                        // ---------------------
+                      )
+                    : null,
               ),
-            ],
-            image: hasThumbnail 
-                ? DecorationImage(
-                    image: NetworkImage(widget.thumbnailUrl!),
-                    fit: BoxFit.cover,
-                  )
-                : null,
-          ),
-          child: !hasThumbnail 
-              ? const Icon(Icons.music_note, size: 80, color: Colors.white)
-              : null,
-        ),
-      );
-    }
+              child: widget.thumbnailUrl == null || widget.thumbnailUrl!.isEmpty
+                  ? const Icon(Icons.music_note, size: 80, color: Colors.white)
+                  : null,
+            ),
+    );
   }
 
   Widget _buildFullScreenOverlay() {
@@ -344,12 +370,25 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Bagian Atas: Slider Mode (Pindah ke sini, menggantikan Text Status)
           SafeArea(
             bottom: false,
             child: Padding(
               padding: const EdgeInsets.all(16.0),
-              child: Center(child: _buildModeSegment()),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // Tombol Back di Fullscreen
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    onPressed: () {
+                      _toggleFullScreen(); // Keluar dari fullscreen
+                    },
+                  ),
+                  // Tombol Mode di Fullscreen
+                  _buildModeButtons(),
+                  const SizedBox(width: 48) // Spacer balance (karena back button ada kiri)
+                ],
+              ),
             ),
           ),
           
@@ -405,58 +444,60 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
           SafeArea(
             top: false,
             child: Padding(
-              padding: const EdgeInsets.only(left: 16.0, right: 16.0, top: 16.0, bottom: 40.0),
-              child: Row(
+              padding: const EdgeInsets.only(left: 10.0, right: 20.0, top: 16.0, bottom: 40.0),
+              child: Column(
                 children: [
-                  ValueListenableBuilder(
-                    valueListenable: _activeController,
-                    builder: (context, VideoPlayerValue value, child) {
-                      return Text(
-                        _formatDuration(value.position),
-                        style: const TextStyle(color: Colors.white70, fontSize: 12),
-                      );
-                    },
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      ValueListenableBuilder(
+                        valueListenable: _activeController,
+                        builder: (context, VideoPlayerValue value, child) {
+                          return Text(
+                            _formatDuration(value.position),
+                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                          );
+                        },
+                      ),
+                      ValueListenableBuilder(
+                        valueListenable: _activeController,
+                        builder: (context, VideoPlayerValue value, child) {
+                          return Text(
+                            _formatDuration(value.duration),
+                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                          );
+                        },
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: ValueListenableBuilder(
-                      valueListenable: _activeController,
-                      builder: (context, VideoPlayerValue value, child) {
-                        return Slider(
-                          activeColor: _accentColor,
-                          inactiveColor: Colors.white54,
-                          value: value.position.inSeconds.toDouble(),
-                          max: value.duration.inSeconds.toDouble(),
-                          onChanged: (double newValue) {
-                            _activeController.seekTo(Duration(seconds: newValue.toInt()));
-                          },
-                        );
-                      },
+                  
+                  const SizedBox(height: 4), 
+                  
+                  Center(
+                    child: SizedBox(
+                      width: 680, 
+                      child: _buildCustomProgressBar(),
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  ValueListenableBuilder(
-                    valueListenable: _activeController,
-                    builder: (context, VideoPlayerValue value, child) {
-                      return Text(
-                        _formatDuration(value.duration),
-                        style: const TextStyle(color: Colors.white70, fontSize: 12),
-                      );
-                    },
+                  
+                  const SizedBox(height: 4), 
+                  
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      IconButton(
+                        onPressed: _toggleRepeat,
+                        icon: const Icon(Icons.repeat),
+                        color: _isRepeating ? _accentColor : Colors.white70, 
+                        iconSize: 30,
+                      ),
+                      IconButton(
+                        onPressed: _toggleFullScreen,
+                        icon: const Icon(Icons.fullscreen_exit, color: Colors.white),
+                        iconSize: 30,
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 10),
-                  IconButton(
-                    onPressed: _toggleRepeat,
-                    icon: const Icon(Icons.repeat),
-                    color: _isRepeating ? _accentColor : Colors.white70, 
-                    iconSize: 30,
-                  ),
-                  IconButton(
-                    onPressed: _toggleFullScreen,
-                    icon: const Icon(Icons.fullscreen_exit, color: Colors.white),
-                    iconSize: 30,
-                  ),
-                  const SizedBox(width: 10),
                 ],
               ),
             ),
@@ -478,20 +519,14 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
           style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 15),
-        ValueListenableBuilder(
-          valueListenable: _activeController,
-          builder: (context, VideoPlayerValue value, child) {
-            return Slider(
-              activeColor: _accentColor,
-              inactiveColor: Colors.grey,
-              value: value.position.inSeconds.toDouble(),
-              max: value.duration.inSeconds.toDouble(),
-              onChanged: (double newValue) {
-                _activeController.seekTo(Duration(seconds: newValue.toInt()));
-              },
-            );
-          },
+        
+        Center(
+          child: SizedBox(
+            width: 300, 
+            child: _buildCustomProgressBar(),
+          ),
         ),
+
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Row(
@@ -531,8 +566,11 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                   backgroundColor: _accentColor,
                   onPressed: () {
                     setState(() {
-                      if (value.isPlaying) _activeController.pause();
-                      else _activeController.play();
+                      if (value.isPlaying) {
+                        _activeController.pause();
+                      } else {
+                        _activeController.play();
+                      }
                     });
                   },
                   child: Icon(value.isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.white),

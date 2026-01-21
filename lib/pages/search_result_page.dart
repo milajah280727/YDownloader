@@ -1,6 +1,7 @@
+import 'dart:convert'; 
 import 'package:flutter/material.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
-import 'package:dio/dio.dart';
+import 'package:http/http.dart' as http;
 import '../widgets/player_page.dart';
 
 class SearchResultPage extends StatefulWidget {
@@ -10,21 +11,24 @@ class SearchResultPage extends StatefulWidget {
 
   @override
   State<SearchResultPage> createState() => _SearchResultPageState();
-}
+} 
 
 class _SearchResultPageState extends State<SearchResultPage> {
   late TextEditingController _searchController;
   
   final YoutubeExplode _yt = YoutubeExplode();
-  final Dio _dio = Dio();
   List<Video> _videos = [];
   bool _isLoading = false;
-  final String _baseUrl = 'https://struck-economics-wedding-seafood.trycloudflare.com';
+  
+  String _baseUrl = ''; 
+  final String _remoteConfigUrl = 'https://gist.githubusercontent.com/milajah280727/216157b20454e7bd30721e2106c0efb7/raw/config.json';
 
   @override
   void initState() {
     super.initState();
     _searchController = TextEditingController(text: widget.searchQuery);
+    // Fetch sekali saat awal buka agar _baseUrl tidak kosong
+    _fetchRemoteConfig();
     _performSearch(widget.searchQuery);
   }
 
@@ -33,6 +37,30 @@ class _SearchResultPageState extends State<SearchResultPage> {
     _searchController.dispose();
     _yt.close();
     super.dispose();
+  }
+
+  // Fungsi untuk mengambil URL Server dari Gist
+  Future<void> _fetchRemoteConfig() async {
+    try {
+      final response = await http.get(Uri.parse(_remoteConfigUrl)).timeout(
+        const Duration(seconds: 3), // Dipercepat timeoutnya menjadi 3 detik
+      );
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> config = json.decode(response.body);
+        final String? newUrl = config['api_base_url'];
+
+        if (newUrl != null && newUrl.isNotEmpty) {
+          setState(() {
+            _baseUrl = newUrl;
+          });
+          print("✅ URL Server berhasil diperbarui: $newUrl");
+        }
+      }
+    } catch (e) {
+      // Jika gagal diam-diam saja, biarkan _baseUrl memakai nilai yang sebelumnya (jika ada)
+      print("⚠️ Gagal refresh config, menggunakan URL sebelumnya (jika ada): $e");
+    }
   }
 
   Future<void> _performSearch(String query) async {
@@ -45,7 +73,7 @@ class _SearchResultPageState extends State<SearchResultPage> {
 
     try {
       var searchResults = await _yt.search.search(query);
-      var videoList = await searchResults.take(10).toList();
+      var videoList = searchResults.take(10).toList();
       
       setState(() {
         _videos = videoList;
@@ -59,40 +87,51 @@ class _SearchResultPageState extends State<SearchResultPage> {
     }
   }
 
-Future<void> _openPlayer(Video video) async {
-    String youtubeUrl = 'https://www.youtube.com/watch?v=${video.id}';
-    
-    String streamVideoUrl = '$_baseUrl/stream-video?url=$youtubeUrl&resolution=720';
-    String streamAudioUrl = '$_baseUrl/stream-audio?url=$youtubeUrl';
+  Future<void> _openPlayer(Video video) async {
+    // 1. Tampilkan loading indicator sebentar agar user tahu aplikasi memproses
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator(color: Colors.pinkAccent))
+    );
 
-    String thumbnailUrl = video.thumbnails.highResUrl;
+    // 2. OTOMATIS REFRESH GIST saat user klik video
+    // Ini memastikan kita selalu punya URL terbaru sebelum memutar
+    await _fetchRemoteConfig();
 
-    // Ambil Judul Video
-    String title = video.title;
+    // Sembunyikan loading
+    if (mounted) Navigator.pop(context);
 
-    try {
-      await _dio.head(streamVideoUrl).timeout(const Duration(seconds:20));
-      
-      if (mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => MediaPlayerPage(
-              onBack: () => Navigator.pop(context),
-              customVideoUrl: streamVideoUrl,
-              customAudioUrl: streamAudioUrl,
-              thumbnailUrl: thumbnailUrl,
-              title: title, // <--- KIRIM JUDUL KE SINI
-            ),
-          ),
-        );
-      }
-    } catch (e) {
+    // 3. Cek apakah URL valid
+    if (_baseUrl.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Gagal memuat stream video dari API: $e")),
+          const SnackBar(content: Text('Gagal memuat konfigurasi server! Cek koneksi.')),
         );
       }
+      return;
+    }
+
+    // 4. Siapkan URL Video
+    String youtubeUrl = 'https://www.youtube.com/watch?v=${video.id}';
+    String streamUrl = '$_baseUrl/stream-video?url=$youtubeUrl&resolution=720';
+
+    String thumbnailUrl = video.thumbnails.highResUrl;
+    String title = video.title;
+    
+    // 5. Buka Player
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => MediaPlayerPage(
+            onBack: () => Navigator.pop(context),
+            customVideoUrl: streamUrl, 
+            thumbnailUrl: thumbnailUrl,
+            title: title,
+          ),
+        ),
+      );
     }
   }
 
@@ -137,10 +176,30 @@ Future<void> _openPlayer(Video video) async {
                       ),
                     ),
                   ),
+                  const SizedBox(width: 10),
                 ],
               ),
             ),
           ),
+
+          // Tampilan Status URL (Otomatis terupdate)
+          if (_baseUrl.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+              child: Row(
+                children: [
+                  const Icon(Icons.cloud_done, color: Colors.green, size: 14),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      "Server: ${Uri.parse(_baseUrl).host}",
+                      style: const TextStyle(color: Colors.green, fontSize: 12),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
           Expanded(
             child: _isLoading
@@ -169,18 +228,43 @@ Future<void> _openPlayer(Video video) async {
                             ),
                             child: ListTile(
                               contentPadding: EdgeInsets.zero,
-                              leading: Container(
-                                width: 120,
-                                height: 90,
-                                decoration: BoxDecoration(
-                                  borderRadius: const BorderRadius.only(
-                                    topLeft: Radius.circular(10),
-                                    bottomLeft: Radius.circular(10),
-                                  ),
-                                  image: DecorationImage(
-                                    image: NetworkImage(video.thumbnails.mediumResUrl),
-                                    fit: BoxFit.cover,
-                                  ),
+                              leading: SizedBox(
+                                width: 110, 
+                                height: 140, 
+                                child: Stack(
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: const BorderRadius.only(
+                                        topLeft: Radius.circular(10),
+                                        bottomLeft: Radius.circular(10),
+                                      ),
+                                      child: Image.network(
+                                        video.thumbnails.mediumResUrl,
+                                        width: 110,
+                                        height: 140,
+                                        fit: BoxFit.cover,
+                                      ),
+                                    ),
+                                    Positioned(
+                                      bottom: 5,
+                                      right: 5,
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: Colors.black.withOpacity(0.7),
+                                          borderRadius: BorderRadius.circular(3),
+                                        ),
+                                        child: Text(
+                                          _formatDuration(video.duration),
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                               title: Text(
@@ -193,18 +277,7 @@ Future<void> _openPlayer(Video video) async {
                                 video.author,
                                 style: const TextStyle(color: Colors.grey),
                               ),
-                              trailing: Container(
-                                padding: const EdgeInsets.all(5),
-                                decoration: BoxDecoration(
-                                  color: Colors.pink.withOpacity(0.2),
-                                  borderRadius: BorderRadius.circular(5),
-                                ),
-                                child: Text(
-                                  _formatDuration(video.duration),
-                                  style: const TextStyle(color: Colors.pinkAccent, fontSize: 12),
-                                ),
-                              ),
-                              onTap: () => _openPlayer(video),
+                              onTap: () => _openPlayer(video), // Disinilah refresh otomatis terjadi
                             ),
                           );
                         },
