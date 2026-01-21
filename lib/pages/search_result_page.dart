@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'package:http/http.dart' as http;
 import '../widgets/player_page.dart';
-
+import 'package:provider/provider.dart';
+import '../services/download_manager.dart';
 class SearchResultPage extends StatefulWidget {
   final String searchQuery;
   
@@ -27,7 +28,6 @@ class _SearchResultPageState extends State<SearchResultPage> {
   void initState() {
     super.initState();
     _searchController = TextEditingController(text: widget.searchQuery);
-    // Fetch sekali saat awal buka agar _baseUrl tidak kosong
     _fetchRemoteConfig();
     _performSearch(widget.searchQuery);
   }
@@ -58,7 +58,6 @@ class _SearchResultPageState extends State<SearchResultPage> {
         }
       }
     } catch (e) {
-      // Jika gagal diam-diam saja, biarkan _baseUrl memakai nilai yang sebelumnya (jika ada)
       print("⚠️ Gagal refresh config, menggunakan URL sebelumnya (jika ada): $e");
     }
   }
@@ -96,7 +95,6 @@ class _SearchResultPageState extends State<SearchResultPage> {
     );
 
     // 2. OTOMATIS REFRESH GIST saat user klik video
-    // Ini memastikan kita selalu punya URL terbaru sebelum memutar
     await _fetchRemoteConfig();
 
     // Sembunyikan loading
@@ -129,6 +127,8 @@ class _SearchResultPageState extends State<SearchResultPage> {
             customVideoUrl: streamUrl, 
             thumbnailUrl: thumbnailUrl,
             title: title,
+            youtubeUrl: youtubeUrl,
+            baseUrl: _baseUrl,
           ),
         ),
       );
@@ -137,151 +137,202 @@ class _SearchResultPageState extends State<SearchResultPage> {
 
   @override
   Widget build(BuildContext context) {
+
+
     return Scaffold(
       backgroundColor: const Color.fromARGB(255, 26, 26, 26),
-      body: Column(
+      body: Stack(
         children: [
-          SafeArea(
-            bottom: false,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: TextField(
-                      controller: _searchController,
-                      readOnly: true,
-                      onTap: () => Navigator.pop(context),
-                      style: const TextStyle(color: Colors.white, fontSize: 14),
-                      decoration: InputDecoration(
-                        hintText: "Cari...",
-                        hintStyle: const TextStyle(color: Colors.grey),
-                        filled: true,
-                        fillColor: Colors.grey[850],
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 0),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(30),
-                          borderSide: BorderSide.none,
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(30),
-                          borderSide: const BorderSide(color: Colors.pink, width: 1),
-                        ),
-                        suffixIcon: const Icon(Icons.search, color: Colors.grey),
+          Column(
+            children: [
+              SafeArea(
+                bottom: false,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back, color: Colors.white),
+                        onPressed: () => Navigator.pop(context),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                ],
-              ),
-            ),
-          ),
-
-          // Tampilan Status URL (Otomatis terupdate)
-          if (_baseUrl.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
-              child: Row(
-                children: [
-                  const Icon(Icons.cloud_done, color: Colors.green, size: 14),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Text(
-                      "Server: ${Uri.parse(_baseUrl).host}",
-                      style: const TextStyle(color: Colors.green, fontSize: 12),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator(color: Colors.pinkAccent))
-                : _videos.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.search_off, size: 80, color: Colors.grey),
-                            const SizedBox(height: 20),
-                            const Text('Tidak ada hasil ditemukan', style: TextStyle(color: Colors.white)),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.all(10),
-                        itemCount: _videos.length,
-                        itemBuilder: (context, index) {
-                          final video = _videos[index];
-                          return Card(
-                            color: Colors.grey[900],
-                            margin: const EdgeInsets.only(bottom: 10),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextField(
+                          controller: _searchController,
+                          readOnly: true,
+                          onTap: () => Navigator.pop(context),
+                          style: const TextStyle(color: Colors.white, fontSize: 14),
+                          decoration: InputDecoration(
+                            hintText: "Cari...",
+                            hintStyle: const TextStyle(color: Colors.grey),
+                            filled: true,
+                            fillColor: Colors.grey[850],
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 0),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(30),
+                              borderSide: BorderSide.none,
                             ),
-                            child: ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              leading: SizedBox(
-                                width: 110, 
-                                height: 140, 
-                                child: Stack(
-                                  children: [
-                                    ClipRRect(
-                                      borderRadius: const BorderRadius.only(
-                                        topLeft: Radius.circular(10),
-                                        bottomLeft: Radius.circular(10),
-                                      ),
-                                      child: Image.network(
-                                        video.thumbnails.mediumResUrl,
-                                        width: 110,
-                                        height: 140,
-                                        fit: BoxFit.cover,
-                                      ),
-                                    ),
-                                    Positioned(
-                                      bottom: 5,
-                                      right: 5,
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                                        decoration: BoxDecoration(
-                                          color: Colors.black.withOpacity(0.7),
-                                          borderRadius: BorderRadius.circular(3),
-                                        ),
-                                        child: Text(
-                                          _formatDuration(video.duration),
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.bold,
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(30),
+                              borderSide: const BorderSide(color: Colors.pink, width: 1),
+                            ),
+                            suffixIcon: const Icon(Icons.search, color: Colors.grey),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                    ],
+                  ),
+                ),
+              ),
+
+              // Tampilan Status URL
+              if (_baseUrl.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.cloud_done, color: Colors.green, size: 14),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(
+                          "Server: ${Uri.parse(_baseUrl).host}",
+                          style: const TextStyle(color: Colors.green, fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              Expanded(
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator(color: Colors.pinkAccent))
+                    : _videos.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.search_off, size: 80, color: Colors.grey),
+                                const SizedBox(height: 20),
+                                const Text('Tidak ada hasil ditemukan', style: TextStyle(color: Colors.white)),
+                              ],
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.all(10),
+                            itemCount: _videos.length,
+                            itemBuilder: (context, index) {
+                              final video = _videos[index];
+                              return Card(
+                                color: Colors.grey[900],
+                                margin: const EdgeInsets.only(bottom: 10),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: SizedBox(
+                                    width: 110, 
+                                    height: 140, 
+                                    child: Stack(
+                                      children: [
+                                        ClipRRect(
+                                          borderRadius: const BorderRadius.only(
+                                            topLeft: Radius.circular(10),
+                                            bottomLeft: Radius.circular(10),
+                                          ),
+                                          child: Image.network(
+                                            video.thumbnails.mediumResUrl,
+                                            width: 110,
+                                            height: 140,
+                                            fit: BoxFit.cover,
                                           ),
                                         ),
-                                      ),
+                                        Positioned(
+                                          bottom: 5,
+                                          right: 5,
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                            decoration: BoxDecoration(
+                                              color: Colors.black.withOpacity(0.7),
+                                              borderRadius: BorderRadius.circular(3),
+                                            ),
+                                            child: Text(
+                                              _formatDuration(video.duration),
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                  ],
+                                  ),
+                                  title: Text(
+                                    video.title,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                  ),
+                                  subtitle: Text(
+                                    video.author,
+                                    style: const TextStyle(color: Colors.grey),
+                                  ),
+                                  onTap: () => _openPlayer(video),
                                 ),
-                              ),
-                              title: Text(
-                                video.title,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                              ),
-                              subtitle: Text(
-                                video.author,
-                                style: const TextStyle(color: Colors.grey),
-                              ),
-                              onTap: () => _openPlayer(video), // Disinilah refresh otomatis terjadi
+                              );
+                            },
+                          ),
+              ),
+            ],
+          ),
+
+          // --- TAMBAHAN PROGRESS BAR GLOBAL DI SEARCH PAGE ---
+          Consumer<DownloadManager>(
+            builder: (context, downloadMgr, child) {
+              return downloadMgr.isDownloading
+                  ? Positioned(
+                      bottom: 10,
+                      left: 10,
+                      right: 10,
+                      child: Container(
+                        color: Colors.black.withOpacity(0.8),
+                        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            LinearProgressIndicator(
+                              value: downloadMgr.progress,
+                              backgroundColor: Colors.transparent,
+                              valueColor: const AlwaysStoppedAnimation<Color>(Colors.pinkAccent),
+                              minHeight: 4,
                             ),
-                          );
-                        },
+                            const SizedBox(height: 5),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    "Downloading ${downloadMgr.currentTask}...",
+                                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  "${(downloadMgr.progress * 100).toInt()}%",
+                                  style: const TextStyle(color: Colors.pinkAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
+                    )
+                  : const SizedBox.shrink();
+            },
           ),
         ],
       ),

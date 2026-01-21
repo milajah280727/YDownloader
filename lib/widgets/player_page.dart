@@ -1,32 +1,44 @@
+import 'dart:io'; // <--- TETAP PENTING
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart'; 
+import 'package:flutter/rendering.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import '../services/download_manager.dart';
 
 class MediaPlayerPage extends StatefulWidget {
   final VoidCallback? onBack;
   final Function(bool)? onFullScreenChanged;
-  
+
   final String? customVideoUrl;
-  final String? customAudioUrl; 
+  final String? customAudioUrl;
   final String? thumbnailUrl;
   final String? title;
 
+  // Parameter baru untuk kebutuhan download
+  final String? youtubeUrl; 
+  final String? baseUrl;
+
+  // Parameter File Lokal
+  final String? localFilePath;
+
   const MediaPlayerPage({
-    super.key, 
-    this.onBack, 
-    this.onFullScreenChanged, 
-    this.customVideoUrl, 
-    this.customAudioUrl, 
+    super.key,
+    this.onBack,
+    this.onFullScreenChanged,
+    this.customVideoUrl,
+    this.customAudioUrl,
     this.thumbnailUrl,
-    this.title
+    this.title,
+    this.youtubeUrl,
+    this.baseUrl,
+    this.localFilePath,
   });
 
   @override
   State<MediaPlayerPage> createState() => _MediaPlayerPageState();
 }
 
-// --- CUSTOM SLIDER TRACK SHAPE ---
 class _CustomSliderTrackShape extends RectangularSliderTrackShape {
   const _CustomSliderTrackShape();
 
@@ -39,18 +51,17 @@ class _CustomSliderTrackShape extends RectangularSliderTrackShape {
     bool isDiscrete = false,
   }) {
     final double trackHeight = sliderTheme.trackHeight ?? 4.0;
-    final double trackLeft = offset.dx; 
+    final double trackLeft = offset.dx;
     final double trackTop = offset.dy + (parentBox.size.height - trackHeight) / 2;
-    final double trackWidth = parentBox.size.width; 
-    
+    final double trackWidth = parentBox.size.width;
+
     return Rect.fromLTWH(trackLeft, trackTop, trackWidth, trackHeight);
   }
 }
 
 class _MediaPlayerPageState extends State<MediaPlayerPage> {
-  // --- HANYA SATU CONTROLLER (VIDEO) ---
   late VideoPlayerController _videoController;
-  
+
   bool _isVideoMode = false; // Default Audio Mode
   bool _isFullScreen = false;
   bool _showControlsOverlay = true;
@@ -61,19 +72,46 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
   @override
   void initState() {
     super.initState();
-    
-    String vidUrl = widget.customVideoUrl ?? 'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4';
 
-    _videoController = VideoPlayerController.networkUrl(Uri.parse(vidUrl));
+    // --- 1. INISIALISASI OTOMATIS BERDASARKAN TIPE FILE ---
+    if (widget.localFilePath != null && widget.localFilePath!.isNotEmpty) {
+      // Cek ekstensi file
+      if (widget.localFilePath!.endsWith('.mp4')) {
+        _isVideoMode = true;
+      } else {
+        _isVideoMode = false; // Audio
+      }
+
+      final file = File(widget.localFilePath!);
+      _videoController = VideoPlayerController.file(file);
+      
+      // Auto-play jika ingin langsung main (opsional)
+      _videoController.initialize().then((_) {
+        if(mounted) {
+          _videoController.play();
+          setState(() {
+            _videoController.setLooping(_isRepeating);
+          });
+        }
+      });
+    } else {
+      // Streaming
+      String vidUrl = widget.customVideoUrl ?? 'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4';
+      _videoController = VideoPlayerController.networkUrl(Uri.parse(vidUrl));
+
+      _videoController.addListener(() {
+        setState(() {});
+      });
+
+      _videoController.initialize().then((_) {
+        setState(() {
+          _videoController.setLooping(_isRepeating);
+        });
+      });
+    }
 
     _videoController.addListener(() {
       setState(() {});
-    });
-
-    _videoController.initialize().then((_) {
-      setState(() {
-        _videoController.setLooping(_isRepeating);
-      });
     });
   }
 
@@ -89,7 +127,7 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
   VideoPlayerController get _activeController {
     return _videoController;
   }
-  
+
   Duration _getBufferedEnd(VideoPlayerValue value) {
     final ranges = value.buffered;
     if (ranges.isEmpty) return Duration.zero;
@@ -100,7 +138,7 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
     setState(() {
       _isFullScreen = !_isFullScreen;
       _showControlsOverlay = true;
-      
+
       if (widget.onFullScreenChanged != null) {
         widget.onFullScreenChanged!(_isFullScreen);
       }
@@ -119,7 +157,7 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
   }
 
   void _toggleMode(bool isVideo) {
-    if (_isVideoMode == isVideo) return; 
+    if (_isVideoMode == isVideo) return;
 
     setState(() {
       _isVideoMode = isVideo;
@@ -133,11 +171,159 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
     });
   }
 
-  // --- WIDGET UNTUK TOOMBOL MODE (IKON TANPA CEKLIS) ---
+  // --- FUNGSI DOWNLOAD ---
+  void _showDownloadMenu() {
+    if (widget.localFilePath != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ini file lokal yang sudah diunduh.')),
+      );
+      return;
+    }
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF2E2E2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.videocam, color: Colors.white),
+              title: const Text('Download Video', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(context);
+                _showResolutionDialog();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.music_note, color: Colors.white),
+              title: const Text('Download Audio', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(context);
+                _startAudioDownload();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showResolutionDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2E2E2E),
+        title: const Text('Pilih Resolusi Video', style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildResolutionOption('360p'),
+            _buildResolutionOption('480p'),
+            _buildResolutionOption('720p'),
+            _buildResolutionOption('1080p'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildResolutionOption(String quality) {
+    return SimpleDialogOption(
+      onPressed: () {
+        Navigator.pop(context);
+        _startVideoDownload(quality);
+      },
+      child: Text(
+        quality,
+        style: const TextStyle(color: Colors.white, fontSize: 16),
+      ),
+    );
+  }
+
+  void _startVideoDownload(String quality) {
+    if (widget.youtubeUrl == null || widget.baseUrl == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Gagal mendapatkan informasi URL untuk download.')),
+      );
+      return;
+    }
+
+    String safeTitle = widget.title?.replaceAll(RegExp(r'[\\/:*?"<>|]'), '') ?? "video_${DateTime.now().millisecondsSinceEpoch}";
+    String downloadUrl = "${widget.baseUrl}/download?url=${widget.youtubeUrl}&quality=$quality";
+
+    final downloadMgr = Provider.of<DownloadManager>(context, listen: false);
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Mulai mendownload video $quality...'), duration: Duration(seconds: 2)),
+    );
+
+    downloadMgr.downloadFile(
+      url: downloadUrl,
+      filename: safeTitle,
+      type: 'video',
+    ).then((_) {
+       if(mounted) {
+         ScaffoldMessenger.of(context).showSnackBar(
+           const SnackBar(content: Text('Download Selesai!'), backgroundColor: Colors.green),
+         );
+       }
+    }).catchError((error) {
+      if(mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Download Gagal: $error'), backgroundColor: Colors.red),
+        );
+      }
+    });
+  }
+
+  void _startAudioDownload() {
+    if (widget.youtubeUrl == null || widget.baseUrl == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Gagal mendapatkan informasi URL untuk download.')),
+      );
+      return;
+    }
+
+    String safeTitle = widget.title?.replaceAll(RegExp(r'[\\/:*?"<>|]'), '') ?? "audio_${DateTime.now().millisecondsSinceEpoch}";
+    String downloadUrl = "${widget.baseUrl}/download-audio?url=${widget.youtubeUrl}";
+
+    final downloadMgr = Provider.of<DownloadManager>(context, listen: false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Mulai mendownload audio...'), duration: Duration(seconds: 2)),
+    );
+
+    downloadMgr.downloadFile(
+      url: downloadUrl,
+      filename: safeTitle,
+      type: 'audio',
+    ).then((_) {
+      if(mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Download Selesai!'), backgroundColor: Colors.green),
+        );
+      }
+    }).catchError((error) {
+      if(mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Download Gagal: $error'), backgroundColor: Colors.red),
+        );
+      }
+    });
+  }
+
   Widget _buildModeButtons() {
+    // --- PERUBAHAN: Jika file lokal, sembunyikan tombol switch mode ---
+    if (widget.localFilePath != null) {
+      return const SizedBox.shrink();
+    }
+
     return Row(
       children: [
-        // Tombol Video
         IconButton(
           onPressed: () => _toggleMode(true),
           icon: const Icon(Icons.videocam),
@@ -145,41 +331,48 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
           iconSize: 24,
         ),
         const SizedBox(width: 10),
-        // Tombol Audio
         IconButton(
           onPressed: () => _toggleMode(false),
           icon: const Icon(Icons.music_note),
           color: !_isVideoMode ? _accentColor : Colors.white70,
           iconSize: 24,
         ),
+        const SizedBox(width: 10),
+        if (widget.youtubeUrl != null)
+          IconButton(
+            onPressed: _showDownloadMenu,
+            icon: const Icon(Icons.more_vert),
+            color: Colors.white70,
+            iconSize: 24,
+          )
+        else
+          Container(width: 24),
       ],
     );
   }
 
-  // --- CUSTOM PROGRESS BAR ---
   Widget _buildCustomProgressBar() {
     return SizedBox(
       width: double.infinity,
-      height: 4, 
+      height: 5,
       child: Stack(
-        alignment: Alignment.centerLeft, 
+        alignment: Alignment.centerLeft,
         children: [
           Container(
             width: double.infinity,
-            height: 4,
+            height: 8,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2), 
+              color: Colors.white.withOpacity(0.2),
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-
           ValueListenableBuilder(
             valueListenable: _activeController,
             builder: (context, VideoPlayerValue value, child) {
               final bufferedEnd = _getBufferedEnd(value);
               final totalDuration = value.duration;
-              final progress = totalDuration.inMilliseconds > 0 
-                  ? (bufferedEnd.inMilliseconds / totalDuration.inMilliseconds).clamp(0.0, 1.0) 
+              final progress = totalDuration.inMilliseconds > 0
+                  ? (bufferedEnd.inMilliseconds / totalDuration.inMilliseconds).clamp(0.0, 1.0)
                   : 0.0;
 
               return FractionallySizedBox(
@@ -188,14 +381,13 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                 child: Container(
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.5), 
+                    color: Colors.white.withOpacity(0.5),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
               );
             },
           ),
-
           ValueListenableBuilder(
             valueListenable: _activeController,
             builder: (context, VideoPlayerValue value, child) {
@@ -232,75 +424,108 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
     }
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: null, // AppBar dihapus, kita buat custom top bar
+      appBar: null,
       body: _buildNormalView(),
     );
   }
 
   Widget _buildNormalView() {
-    return Column(
+    return Stack( // --- GUNAKAN STACK UNTUK TAMBAHAN PROGRESS BAR ---
       children: [
-        // --- CUSTOM TOP BAR (SEJAJAR BACK BUTTON & MODE) ---
-        SafeArea(
-          bottom: false,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-            child: Row(
-              children: [
-                // Tombol Kembali di Kiri
-                if (widget.onBack != null)
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
-                    onPressed: widget.onBack,
-                  ),
-                
-                // Spacer agar mode tombol ada di kanan (atau tengah jika diinginkan)
-                const Spacer(),
-                
-                // Tombol Mode (Video & Audio)
-                _buildModeButtons(),
-                
-                const SizedBox(width: 10), // Padding kanan
-              ],
+        Column(
+          children: [
+            SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                child: Row(
+                  children: [
+                    if (widget.onBack != null)
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
+                        onPressed: widget.onBack,
+                      ),
+                    const Spacer(),
+                    _buildModeButtons(),
+                    const SizedBox(width: 10),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ),
-        
-        // --- VISUAL AREA (VIDEO & THUMBNAIL) ---
-        Expanded(
-          child: Align(
-            alignment: Alignment.center,
-            child: Padding(
-              padding: const EdgeInsets.all(0.0),
-              child: _buildVisualArea(isFull: false),
+            Expanded(
+              child: Align(
+                alignment: Alignment.center,
+                child: Padding(
+                  padding: const EdgeInsets.all(0.0),
+                  child: _buildVisualArea(isFull: false),
+                ),
+              ),
             ),
-          ),
+            Container(
+              padding: const EdgeInsets.only(bottom: 30.0, left: 20, right: 20, top: 20),
+              decoration: BoxDecoration(
+                color: Colors.grey[900],
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+              ),
+              child: _buildUnifiedControls(),
+            ),
+          ],
         ),
-        
-        // --- BOTTOM CONTROLS ---
-        Container(
-          padding: const EdgeInsets.only(bottom: 30.0, left: 20, right: 20, top: 20),
-          decoration: BoxDecoration(
-            color: Colors.grey[900],
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          child: _buildUnifiedControls(),
+        // --- TAMBAHAN PROGRESS DOWNLOAD DI PLAYER ---
+        Consumer<DownloadManager>(
+          builder: (context, downloadMgr, child) {
+            return downloadMgr.isDownloading
+                ? Positioned(
+                    bottom: 0, // Di atas kontrol bawah player
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      color: Colors.black.withOpacity(0.8),
+                      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          LinearProgressIndicator(
+                            value: downloadMgr.progress,
+                            backgroundColor: Colors.transparent,
+                            valueColor: const AlwaysStoppedAnimation<Color>(Colors.pinkAccent),
+                            minHeight: 4,
+                          ),
+                          const SizedBox(height: 5),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  "Downloading ${downloadMgr.currentTask}...",
+                                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                "${(downloadMgr.progress * 100).toInt()}%",
+                                style: const TextStyle(color: Colors.pinkAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : const SizedBox.shrink();
+          },
         ),
       ],
     );
   }
 
-    Widget _buildFullScreenView() {
+  Widget _buildFullScreenView() {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
-        // --- TAMBAHKAN BARIS INI ---
-        alignment: Alignment.center, 
-        // ---------------------------
-        
+        alignment: Alignment.center,
         children: [
           _buildVisualArea(isFull: true),
-          
           if (_showControlsOverlay)
             GestureDetector(
               onTap: () {
@@ -309,7 +534,7 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                 });
               },
               child: Container(
-                color: Colors.transparent, 
+                color: Colors.transparent,
                 child: _buildFullScreenOverlay(),
               ),
             )
@@ -326,12 +551,60 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                 height: double.infinity,
               ),
             ),
+          // --- PROGRESS DOWNLOAD DI FULLSCREEN ---
+          Consumer<DownloadManager>(
+            builder: (context, downloadMgr, child) {
+              return downloadMgr.isDownloading
+                  ? Positioned(
+                      top: 20, // Di tengah atas layar fullscreen
+                      left: 0,
+                      right: 0,
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 20),
+                        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.8),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            LinearProgressIndicator(
+                              value: downloadMgr.progress,
+                              backgroundColor: Colors.transparent,
+                              valueColor: const AlwaysStoppedAnimation<Color>(Colors.pinkAccent),
+                              minHeight: 4,
+                            ),
+                            const SizedBox(height: 5),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    "Downloading ${downloadMgr.currentTask}...",
+                                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  "${(downloadMgr.progress * 100).toInt()}%",
+                                  style: const TextStyle(color: Colors.pinkAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : const SizedBox.shrink();
+            },
+          ),
         ],
       ),
     );
   }
 
-    Widget _buildVisualArea({required bool isFull}) {
+  Widget _buildVisualArea({required bool isFull}) {
     final controller = _activeController;
 
     if (!controller.value.isInitialized) {
@@ -341,23 +614,20 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
     return AspectRatio(
       aspectRatio: controller.value.aspectRatio,
       child: _isVideoMode
-          ? VideoPlayer(controller) // Video otomatis mengikuti AspectRatio controller
+          ? VideoPlayer(controller)
           : Container(
-              // Tampilkan Thumbnail
               width: double.infinity,
               height: double.infinity,
               decoration: BoxDecoration(
-                color: Colors.black, // Tambahkan background hitam agar konten kontras
+                color: Colors.black,
                 image: widget.thumbnailUrl != null && widget.thumbnailUrl!.isNotEmpty
                     ? DecorationImage(
                         image: NetworkImage(widget.thumbnailUrl!),
-                        // --- UBAH BARIS INI ---
-                        fit: BoxFit.contain, 
-                        // ---------------------
+                        fit: BoxFit.contain,
                       )
                     : null,
               ),
-              child: widget.thumbnailUrl == null || widget.thumbnailUrl!.isEmpty
+              child: (widget.thumbnailUrl == null || widget.thumbnailUrl!.isEmpty)
                   ? const Icon(Icons.music_note, size: 80, color: Colors.white)
                   : null,
             ),
@@ -366,7 +636,7 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
 
   Widget _buildFullScreenOverlay() {
     return Container(
-      color: Colors.black.withOpacity(0.2), 
+      color: Colors.black.withOpacity(0.2),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -377,21 +647,18 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  // Tombol Back di Fullscreen
                   IconButton(
                     icon: const Icon(Icons.arrow_back, color: Colors.white),
                     onPressed: () {
-                      _toggleFullScreen(); // Keluar dari fullscreen
+                      _toggleFullScreen();
                     },
                   ),
-                  // Tombol Mode di Fullscreen
                   _buildModeButtons(),
-                  const SizedBox(width: 48) // Spacer balance (karena back button ada kiri)
+                  const SizedBox(width: 48)
                 ],
               ),
             ),
           ),
-          
           Expanded(
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -470,25 +737,21 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                       ),
                     ],
                   ),
-                  
-                  const SizedBox(height: 4), 
-                  
+                  const SizedBox(height: 4),
                   Center(
                     child: SizedBox(
-                      width: 680, 
+                      width: 680,
                       child: _buildCustomProgressBar(),
                     ),
                   ),
-                  
-                  const SizedBox(height: 4), 
-                  
+                  const SizedBox(height: 4),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       IconButton(
                         onPressed: _toggleRepeat,
                         icon: const Icon(Icons.repeat),
-                        color: _isRepeating ? _accentColor : Colors.white70, 
+                        color: _isRepeating ? _accentColor : Colors.white70,
                         iconSize: 30,
                       ),
                       IconButton(
@@ -519,14 +782,12 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
           style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 15),
-        
         Center(
           child: SizedBox(
-            width: 300, 
+            width: 300,
             child: _buildCustomProgressBar(),
           ),
         ),
-
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Row(
@@ -589,7 +850,7 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
               iconSize: 30),
           ],
         ),
-        const SizedBox(height: 95), 
+        const SizedBox(height: 95),
       ],
     );
   }
